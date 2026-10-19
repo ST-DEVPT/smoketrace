@@ -34,7 +34,6 @@ import threading
 import time
 import unicodedata
 import urllib.request
-import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -164,25 +163,71 @@ PROBE_KINDS = {"FPing": "icmp", "FPing6": "icmp", "TCPPing": "tcp", "DNS": "dns"
 INHERITED = ("probe", "slaves", "nomasterpoll", "port", "lookup", "loss_warn", "loss_crit", "latency_warn")
 
 
-def read_smokeping(path, files, depth=0):
+SECTION_FILES = ("General", "Database", "Probes", "Slaves", "Targets")   # split layouts (Debian, linuxserver)
+
+
+def locate(path, base):
+    """A path from SmokePing's config, found here. Paths are often absolute for the machine or container SmokePing
+    ran in (/etc/smokeping/..., /config/...); when one is not here, try it under the folder the config is in,
+    dropping leading parts: /config/target/dns.conf -> <base>/target/dns.conf."""
+    rooted = str(path).startswith(("/", "\\"))           # absolute for a Linux SmokePing, wherever we run
+    path = Path(path)
+    if not (path.is_absolute() or rooted):
+        return base / path
+    if path.exists():
+        return path
+    parts = path.parts[1:]
+    for i in range(len(parts)):
+        candidate = base.joinpath(*parts[i:])
+        if candidate.exists():
+            return candidate
+    return path
+
+
+def smokeping_main(path):
+    """SMOKEPING_CONFIG may be the main file or the folder: its `config` file, or the split files themselves."""
+    path = Path(path)
+    if not path.is_dir():
+        return path, None
+    if (path / "config").is_file():
+        return path / "config", None
+    found = [f for f in SECTION_FILES if (path / f).is_file()]
+    if "Targets" not in found:
+        raise SystemExit(f"{path}: no `config` file and no `Targets` file in this folder")
+    return None, [path / f for f in found]
+
+
+def read_smokeping(path, files, depth=0, base=None):
     """The config's lines with every @include expanded; `files` collects each file read (for reloads)."""
     if depth > 10:
         raise SystemExit(f"{path}: @include nested too deep")
     path = Path(path)
+    base = base or path.parent
     files.append(path)
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
-        raise SystemExit(f"cannot read {path}: {e}")
+        if depth == 0:
+            raise SystemExit(f"cannot read {path}: {e}")
+        log(f"@include {path} skipped: {e.strerror or e}")      # one missing include must not stop the rest
+        return []
     lines = []
     for line in text.splitlines():
         s = line.strip()
         if s.startswith("@include"):
-            inc = Path(s[len("@include"):].strip())
-            lines += read_smokeping(inc if inc.is_absolute() else path.parent / inc, files, depth + 1)
+            lines += read_smokeping(locate(s[len("@include"):].strip(), base), files, depth + 1, base)
         else:
             lines.append(s)
     return lines
+
+
+def read_smokeping_config(path, files):
+    """Lines of the whole config: from its main file, or from a folder of split section files."""
+    main, parts = smokeping_main(path)
+    if main:
+        return read_smokeping(main, files), main.parent
+    base = parts[0].parent
+    return [line for f in parts for line in read_smokeping(f, files, base=base)], base
 
 
 def parse_smokeping(lines):
@@ -268,8 +313,7 @@ def smokeping_agents(secs, base, files):
     slaves = [(n, attrs) for level, n, attrs in nodes if level == 1]
     if not slaves:
         return {}
-    path = Path(root.get("secrets", ""))
-    path = path if path.is_absolute() else base / path
+    path = locate(root.get("secrets", "smokeping_secrets"), base)
     files.append(path)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -294,9 +338,10 @@ def load_config(a):
     """-> {targets, agents, step, pings, files}, from SmokePing's config or targets.ini, plus AGENTS."""
     files, step, pings, agents = [], DEFAULT_STEP, DEFAULT_PINGS, {}
     if a.smokeping:
-        secs = parse_smokeping(read_smokeping(a.smokeping, files))
+        lines, base = read_smokeping_config(a.smokeping, files)
+        secs = parse_smokeping(lines)
         targets = smokeping_targets(secs)
-        agents = smokeping_agents(secs, Path(a.smokeping).parent, files)
+        agents = smokeping_agents(secs, base, files)
         db = secs.get("Database", ({}, []))[0]
         try:
             step = int(db.get("step", DEFAULT_STEP))
@@ -421,10 +466,6 @@ def parse_mtr(text):
     return hops
 
 
-def flow_port(tid):
-    return 33500 + zlib.crc32(tid.encode()) % 2000
-
-
 def mtr_command(t):
     cmd = ["mtr", "--json", "-n", "-c", str(MTR_CYCLES)]
     if ASN_LOOKUP:
@@ -432,17 +473,19 @@ def mtr_command(t):
     if t["probe"] == "tcp":
         cmd += ["-T", "-P", str(t["port"])]  # the same port the latency is measured on
     elif t["probe"] == "dns":
-        # one fixed UDP flow, so ECMP routers hash every probe the same way (paris-traceroute's trick)
-        cmd += ["-u", "-P", "53", "--localport", str(flow_port(t["id"]))]
+        cmd += ["-u", "-P", "53"]           # UDP to port 53, the path a DNS query takes
     return cmd + [t["host"]]
 
 
 def mtr(t, _ts):
-    # ponytail: ICMP traces cannot pin their flow in mtr; ECMP on ICMP shows up as routes taking turns
+    # ponytail: mtr cannot pin a flow (its --localport gets no UDP answers back); ECMP shows as routes taking turns
     r = subprocess.run(mtr_command(t), capture_output=True, text=True, timeout=MTR_CYCLES * 4 + 60)
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip() or f"mtr exit {r.returncode}")
-    return parse_mtr(r.stdout)
+    hops = parse_mtr(r.stdout)
+    if not hops:
+        raise RuntimeError("mtr answered with no hops")
+    return hops
 
 
 def summarize(rtts):

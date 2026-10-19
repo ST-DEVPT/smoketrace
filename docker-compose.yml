@@ -9,11 +9,11 @@ services:
     volumes:
       - ./data:/data              # targets.ini and the database
       # Coming from SmokePing? Read its config as it is (targets, slaves as agents, step and pings):
-      # - /etc/smokeping:/etc/smokeping:ro
+      # - /etc/smokeping:/etc/smokeping:ro         # or SmokePing's container folder: /DATA/smokeping/config:/etc/smokeping:ro
     environment:
       TZ: Europe/Lisbon
       NAME: home                  # what the dashboard calls this probe
-      # SMOKEPING_CONFIG: /etc/smokeping/config
+      # SMOKEPING_CONFIG: /etc/smokeping
       # Remote agents allowed to push, each with its own long random token (openssl rand -hex 24):
       # AGENTS: porto=paste-a-long-random-token,office=paste-another-one
       # PORT: 8099

@@ -101,7 +101,7 @@ def test_hosts_and_mtr_commands():
     assert st.mtr_command(target("a", "1.1.1.1")) == ["mtr", "--json", "-n", "-c", "10", "-z", "1.1.1.1"]
     assert st.mtr_command(target("b", "h", probe="tcp", port=443))[-4:] == ["-T", "-P", "443", "h"]
     cmd = st.mtr_command(target("c", "9.9.9.9", probe="dns", lookup="example.org"))
-    assert cmd[-6:] == ["-u", "-P", "53", "--localport", str(st.flow_port("c")), "9.9.9.9"]
+    assert cmd[-4:] == ["-u", "-P", "53", "9.9.9.9"]
 
 
 def test_route_segments():
@@ -282,6 +282,33 @@ def test_smokeping_config():
         assert st.probers(t["internet-cloudflare"], sources) == ["home"]
         assert st.probers(t["remote-vps-deep"], sources) == ["porto", "office"]
         assert st.probers({"id": "x"}, sources) == sources                   # targets.ini: everyone probes everything
+
+
+def test_smokeping_from_another_container():
+    """linuxserver/smokeping: a folder of split files, @include and secrets as absolute /config/... paths."""
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "target").mkdir()
+        Path(d, "Probes").write_text("*** Probes ***\n+ FPing\nbinary = /usr/sbin/fping\n", encoding="utf-8")
+        Path(d, "Slaves").write_text("*** Slaves ***\nsecrets = /config/smokeping_secrets\n+porto\n", encoding="utf-8")
+        Path(d, "smokeping_secrets").write_text("porto:" + TOKEN + "\n", encoding="utf-8")
+        Path(d, "Targets").write_text("*** Targets ***\nprobe = FPing\nmenu = Top\ntitle = Top\n"
+                                      "@include /config/target/dns.conf\n@include /config/target/gone.conf\n",
+                                      encoding="utf-8")
+        Path(d, "target", "dns.conf").write_text("+ DNS\nmenu = DNS\n++ Cloudflare\nhost = 1.1.1.1\n", encoding="utf-8")
+        Path(d, "Alerts").write_text("*** Alerts ***\nto = root@localhost\n", encoding="utf-8")
+        for path in (Path(d), Path(d, "Targets")):
+            cfg = st.load_config(args(smokeping=path))
+            assert [t["id"] for t in cfg["targets"]] == ["dns-cloudflare"], cfg["targets"]
+        cfg = st.load_config(args(smokeping=Path(d)))      # the folder: Probes, Slaves and secrets come along
+        assert cfg["agents"] == {"porto": {"token": TOKEN, "url": None}}
+        Path(d, "config").write_text("@include Probes\n@include Slaves\n@include Targets\n", encoding="utf-8")
+        assert st.load_config(args(smokeping=Path(d)))["agents"] == {"porto": {"token": TOKEN, "url": None}}
+        try:
+            st.load_config(args(smokeping=Path(d, "nothing")))
+        except SystemExit as e:
+            assert "cannot read" in str(e)
+        else:
+            raise AssertionError("a missing main file must stop the start")
 
 
 def test_bare_targets_file_and_reload():
