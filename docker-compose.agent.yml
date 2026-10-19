@@ -1,0 +1,19 @@
+# A remote agent: probes the server's targets from where it runs and pushes every round to the server.
+# Nothing to store and no port to open: it only makes outgoing connections.
+#   docker compose -f docker-compose.agent.yml up -d
+services:
+  smoketrace-agent:
+    image: ghcr.io/st-devpt/smoketrace:latest
+    container_name: smoketrace-agent
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TZ: Europe/Lisbon
+      SERVER: http://smoketrace.lan:8099    # over the internet: put the server behind HTTPS or a VPN
+      TOKEN: paste-this-agent-s-token       # the token after its name in the server's AGENTS
+    logging:
+      options: {max-size: 10m, max-file: "3"}
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    security_opt: ["no-new-privileges:true"]

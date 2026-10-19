@@ -22,6 +22,12 @@ JPEG = {"type": "jpeg", "quality": 88}
 RANGES = {"3 h": 10800, "24 h": 86400, "7 d": 604800, "30 d": 2592000}
 
 
+def new_page(browser, **kw):
+    page = browser.new_page(**kw)
+    page.add_init_script("localStorage.setItem('lang', 'en')")   # the README is in English
+    return page
+
+
 def open_target(page, tid, range_label=None):
     page.goto(f"{URL}/#/t/{tid}")
     page.wait_for_function("S.det && S.trace && S.geo")
@@ -73,7 +79,7 @@ def shoot():
         browser = pw.chromium.launch(executable_path=os.environ.get("CHROMIUM") or None)
 
         for scheme, name in (("dark", "overview.jpg"), ("light", "overview-light.jpg")):
-            page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme=scheme)
+            page = new_page(browser, viewport={"width": 1440, "height": 900}, color_scheme=scheme)
             page.goto(URL + "/#/")
             page.wait_for_selector("table.targets")
             page.wait_for_timeout(300)
@@ -82,7 +88,7 @@ def shoot():
                             **JPEG)
             page.close()
 
-        page = browser.new_page(viewport={"width": 1440, "height": 1010}, color_scheme="dark")
+        page = new_page(browser, viewport={"width": 1440, "height": 1010}, color_scheme="dark")
         open_target(page, "internet-cloudflare-dns")
         click_route(page, "B")
         page.mouse.move(10, 10)
@@ -101,7 +107,7 @@ def shoot():
         page.locator("#chart").locator("xpath=ancestor::section[1]").screenshot(path=DOCS / "flap.jpg", **JPEG)
         page.close()
 
-        page = browser.new_page(viewport={"width": 390, "height": 844}, device_scale_factor=2,
+        page = new_page(browser, viewport={"width": 390, "height": 844}, device_scale_factor=2,
                                 is_mobile=True, has_touch=True, color_scheme="dark")
         open_target(page, "internet-cloudflare-dns")
         page.screenshot(path=DOCS / "phone.jpg", **JPEG)

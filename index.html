@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-PT">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -97,6 +97,13 @@ td small { display: block; font-size: 11px; color: var(--ink-2); line-height: 1.
 .delta { font-size: 11px; color: var(--ink-2); margin-left: 6px; }
 .chg { display: inline-flex; align-items: center; gap: 5px; font-weight: 550; }
 .spark { display: block; }
+.srcbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.srcbar .k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); }
+.seg button .ic { margin-right: 5px; vertical-align: -1px; }
+.toolbar .srcbar { margin: 0; }
+td.srcs { white-space: nowrap; }
+.sv { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; font-size: 12px; color: var(--ink-2); }
+.lang { height: 28px; padding: 0 10px; font-size: 12px; font-weight: 600; letter-spacing: .04em; }
 
 /* detail */
 .crumbs { font-size: 12px; }
@@ -194,13 +201,14 @@ details .tablewrap { max-height: 420px; overflow: auto; }
 <body>
 <header class="top">
   <a class="brand" href="#/"><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M1 12c2.5 0 2.5-6 5-6s2.5 8 5 8 2.5-10 5-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>smoke<span>trace</span></span></a>
-  <nav class="chips" id="chips" aria-label="Filtrar por estado"></nav>
-  <label class="search"><span hidden>Procurar</span><input id="q" type="search" placeholder="Procurar alvo, grupo ou IP   /" autocomplete="off"></label>
+  <nav class="chips" id="chips"></nav>
+  <label class="search"><span hidden>Search</span><input id="q" type="search" autocomplete="off"></label>
   <span class="updated" id="updated" aria-live="polite"></span>
+  <button class="btn lang" id="lang" data-act="lang"></button>
 </header>
 <div class="banner" id="banner" role="alert" hidden>
-  <span>Sem ligação ao smoketrace. Os dados mostrados podem estar desatualizados.</span>
-  <button class="btn" data-act="retry">Tentar agora</button>
+  <span></span>
+  <button class="btn" data-act="retry"></button>
 </div>
 <main id="view"></main>
 
@@ -214,18 +222,106 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
 };
 
+// ---------- language ----------
+const LANG = (store.get("lang") || (navigator.language || "en").slice(0, 2)) === "pt" ? "pt" : "en";
+const LOC = LANG === "pt" ? "pt-PT" : "en-GB";
+document.documentElement.lang = LANG === "pt" ? "pt-PT" : "en";
+const pl = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const I18N = {
+  en: {
+    ok: "OK", warn: "Warning", crit: "Critical", down: "Down", stale: "No data",
+    ago: (n, u) => `${n} ${u} ago`, updated: a => `Updated ${a}`,
+    changes: n => pl(n, "change", "changes"), hops: n => pl(n, "hop", "hops"),
+    hopsChanged: n => pl(n, "hop changed", "hops changed"), nNew: n => `${n} new`, nGone: n => `${n} gone`,
+    nSilent: n => `${n} silent`, route: "Route", showOnly: l => `Show only: ${l}`, filterAria: "Filter by status",
+    search: "Search target, group or IP   /", offline: "No connection to smoketrace. What you see may be out of date.",
+    retry: "Retry now", noConnT: "No connection to smoketrace", noConnB: "Check that the service is running.",
+    noTargetsT: "No targets yet", noTargetsB: "Add targets to <code>targets.ini</code> and restart the service.",
+    noMatch: "No target matches the filter", clear: "Clear filters",
+    cStatus: "Status", cTarget: "Target", cMedian: "Median", cLoss: "Loss", cSpark: "Median · 24 h", cRoute: "Route · 24 h",
+    cRound: "Round", cSeen: "Seen from", aboveBase: b => `Above its 24 h median (${b})`, lastAgo: a => `last ${a}`,
+    stable: "stable", sparkLbl: (a, b, c) => `Median over 24 h between ${a} and ${b}; worst loss ${c}`,
+    sparkNone: "No replies in 24 h", notFoundT: "Target not found",
+    notFoundB: 'It may have been removed from <code>targets.ini</code>. <a href="#/">See all targets</a>',
+    allTargets: "← All targets", rangeAria: "Time range", srcAria: "Seen from",
+    hint: "Click the chart (or ← → and Enter) for the traceroute of that moment.",
+    chartTitle: "Latency, loss and route", chartAria: "Latency chart", rawTitle: "Data as a table", loading: "Loading…",
+    base: b => `24 h baseline: ${b}`, noBase: "no baseline yet", jitterSub: "mean |Δ| between replies",
+    lossSub: n => `last round · ${n} pings`, curRoute: "Current route", since: a => `since ${a}`,
+    noTrace: "no traceroute yet", changesK: r => `Changes · ${r}`, stableRoute: "stable route",
+    smoke: n => `Spread of the ${n} pings`, lossLt: c => `Loss < ${c}`, routes: "Routes",
+    lossAxis: "loss", routeAxis: "route", waiting: "Waiting for the first round: data shows up within 5 min.",
+    noData: "No data", chartLbl: (n, a, b, c) => `Latency of ${n}: median between ${a} and ${b}; route: ${c}. A data table is below.`,
+    minMax: "Min – max", clickTrace: "Click for the traceroute",
+    same: "= same", changed: "changed", added: "+ new", removed: "− gone", unknown: "? silent",
+    rlTip: "The loss on this hop does not carry on to the destination: the router is rate-limiting or deprioritising ICMP replies. It is not real loss.",
+    realTip: "The loss starts at this hop and lasts to the destination: the problem is here, or on the link into here.",
+    silentTip: "Did not answer ICMP (normal for many routers)", realStarts: "real loss starts here",
+    compareAria: "Compare with", vsRoute: "vs. previous route", vsRound: "vs. previous round",
+    traceErr: "Could not load the traceroute", tryAgain: "Try again", noTracesT: "No traceroutes yet",
+    noTracesB: "The first mtr runs in the next round (≤ 5 min).",
+    stuck: (h, ip) => `The traceroute does not reach the destination: the last answer comes from hop ${h} (${ip}).`,
+    noPrev: "No previous traceroute.", sameHops: "Same hops", dest: "destination", now: "Now", before: "Before",
+    goLatest: "go to the latest", latest: "latest",
+    fallback: "No route change in this target's history: comparing with the previous round.",
+    cAvg: "Average", cSd: "Std dev", cDelta: "Δ average", cHop: "Hop", cTime: "Time", cMin: "Min", cMax: "Max",
+    foot: "Loss on one intermediate hop only is ICMP rate-limiting, not real loss. What counts is loss that starts at a hop and lasts to the destination.",
+    langBtn: "PT", langTitle: "Português",
+  },
+  pt: {
+    ok: "OK", warn: "Aviso", crit: "Crítico", down: "Em baixo", stale: "Sem dados",
+    ago: (n, u) => `há ${n} ${u}`, updated: a => `Atualizado ${a}`,
+    changes: n => pl(n, "mudança", "mudanças"), hops: n => pl(n, "salto", "saltos"),
+    hopsChanged: n => pl(n, "salto mudou", "saltos mudaram"), nNew: n => pl(n, "novo", "novos"), nGone: n => pl(n, "saiu", "saíram"),
+    nSilent: n => `${n} sem resposta`, route: "Rota", showOnly: l => `Mostrar só: ${l}`, filterAria: "Filtrar por estado",
+    search: "Procurar alvo, grupo ou IP   /", offline: "Sem ligação ao smoketrace. Os dados mostrados podem estar desatualizados.",
+    retry: "Tentar agora", noConnT: "Sem ligação ao smoketrace", noConnB: "Confirma que o serviço está a correr.",
+    noTargetsT: "Sem alvos configurados", noTargetsB: "Adiciona alvos ao <code>targets.ini</code> e reinicia o serviço.",
+    noMatch: "Nenhum alvo corresponde ao filtro", clear: "Limpar filtros",
+    cStatus: "Estado", cTarget: "Alvo", cMedian: "Mediana", cLoss: "Perda", cSpark: "Mediana · 24 h", cRoute: "Rota · 24 h",
+    cRound: "Ronda", cSeen: "Visto de", aboveBase: b => `Acima da mediana das últimas 24 h (${b})`, lastAgo: a => `última ${a}`,
+    stable: "estável", sparkLbl: (a, b, c) => `Mediana nas últimas 24 h entre ${a} e ${b}; perda máxima ${c}`,
+    sparkNone: "Sem respostas nas últimas 24 h", notFoundT: "Alvo não encontrado",
+    notFoundB: 'Pode ter sido removido do <code>targets.ini</code>. <a href="#/">Ver todos os alvos</a>',
+    allTargets: "← Todos os alvos", rangeAria: "Intervalo de tempo", srcAria: "Visto de",
+    hint: "Clica no gráfico (ou ← → e Enter) para abrir o traceroute desse momento.",
+    chartTitle: "Latência, perda e rota", chartAria: "Gráfico de latência", rawTitle: "Dados em tabela", loading: "A carregar…",
+    base: b => `base 24 h: ${b}`, noBase: "sem base ainda", jitterSub: "média |Δ| entre respostas",
+    lossSub: n => `última ronda · ${n} pings`, curRoute: "Rota atual", since: a => `desde ${a}`,
+    noTrace: "ainda sem traceroute", changesK: r => `Mudanças · ${r}`, stableRoute: "rota estável",
+    smoke: n => `Dispersão dos ${n} pings`, lossLt: c => `Perda < ${c}`, routes: "Rotas",
+    lossAxis: "perda", routeAxis: "rota", waiting: "À espera da primeira ronda: os dados aparecem em ≤ 5 min.",
+    noData: "Sem dados", chartLbl: (n, a, b, c) => `Latência de ${n}: mediana entre ${a} e ${b}, ${c} de rota. Tabela de dados disponível abaixo.`,
+    minMax: "Mín – máx", clickTrace: "Clica para ver o traceroute",
+    same: "= igual", changed: "mudou", added: "+ novo", removed: "− saiu", unknown: "? sem resposta",
+    rlTip: "A perda neste salto não continua até ao destino: o router está a limitar (rate-limit) ou a despriorizar respostas ICMP. Não é perda real.",
+    realTip: "A perda começa neste salto e mantém-se até ao destino: é aqui (ou na ligação para aqui) que o problema começa.",
+    silentTip: "Não respondeu a ICMP (normal em muitos routers)", realStarts: "perda real começa aqui",
+    compareAria: "Comparar com", vsRoute: "vs. rota anterior", vsRound: "vs. ronda anterior",
+    traceErr: "Não foi possível carregar o traceroute", tryAgain: "Tentar de novo", noTracesT: "Ainda sem traceroutes",
+    noTracesB: "O primeiro mtr corre na próxima ronda (≤ 5 min).",
+    stuck: (h, ip) => `O traceroute não chega ao destino: a última resposta vem do salto ${h} (${ip}).`,
+    noPrev: "Sem traceroute anterior.", sameHops: "Mesmos saltos", dest: "destino", now: "Agora", before: "Antes",
+    goLatest: "ir para o mais recente", latest: "mais recente",
+    fallback: "Sem mudança de rota no histórico deste alvo: a comparar com a ronda anterior.",
+    cAvg: "Média", cSd: "Desvio", cDelta: "Δ média", cHop: "Salto", cTime: "Hora", cMin: "Mín", cMax: "Máx",
+    foot: "Perda só num salto intermédio = rate-limit de ICMP, não perda real. Conta a perda que começa num salto e se mantém até ao destino.",
+    langBtn: "EN", langTitle: "English",
+  },
+};
+const t = (k, ...a) => { const v = I18N[LANG][k] ?? I18N.en[k] ?? k; return typeof v === "function" ? v(...a) : v; };
+
 // ---------- formatting ----------
 const NB = " ";
 const ms = v => v == null ? "—" : v < 10 ? v.toFixed(2) : v < 100 ? v.toFixed(1) : String(Math.round(v));
 const msU = v => v == null ? "—" : ms(v) + NB + "ms";
 const pct = v => v == null ? "—" : (v > 0 && v < 1 ? v.toFixed(1) : Math.round(v)) + NB + "%";
-const fT = new Intl.DateTimeFormat("pt-PT", { hour: "2-digit", minute: "2-digit" });
-const fD = new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "2-digit" });
-const fDT = new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+const fT = new Intl.DateTimeFormat(LOC, { hour: "2-digit", minute: "2-digit" });
+const fD = new Intl.DateTimeFormat(LOC, { day: "2-digit", month: "2-digit" });
+const fDT = new Intl.DateTimeFormat(LOC, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const at = (ts, f = fDT) => f.format(new Date(ts * 1000));
-const ago = s => s < 90 ? `há ${Math.max(0, Math.round(s))} s` : s < 5400 ? `há ${Math.round(s / 60)} min`
-  : s < 129600 ? `há ${Math.round(s / 3600)} h` : `há ${Math.round(s / 86400)} d`;
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const ago = s => s < 90 ? t("ago", Math.max(0, Math.round(s)), "s") : s < 5400 ? t("ago", Math.round(s / 60), "min")
+  : s < 129600 ? t("ago", Math.round(s / 3600), "h") : t("ago", Math.round(s / 86400), "d");
 
 // ---------- status: shape + label, never colour alone ----------
 const SHAPE = {
@@ -235,23 +331,23 @@ const SHAPE = {
   down: '<path d="M2.4 1 6 4.6 9.6 1 11 2.4 7.4 6 11 9.6 9.6 11 6 7.4 2.4 11 1 9.6 4.6 6 1 2.4z"/>',
   stale: '<circle cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/>',
 };
-const LABEL = { ok: "OK", warn: "Aviso", crit: "Crítico", down: "Em baixo", stale: "Sem dados" };
 const SEV = { down: 4, crit: 3, warn: 2, stale: 1, ok: 0 };
 const ORDER = ["down", "crit", "warn", "stale", "ok"];
 const icon = st => `<svg class="ic ic-${st}" viewBox="0 0 12 12" aria-hidden="true">${SHAPE[st]}</svg>`;
-const pill = st => `<span class="st">${icon(st)}${LABEL[st]}</span>`;
+const pill = st => `<span class="st">${icon(st)}${t(st)}</span>`;
 const SWAP = '<svg class="ic" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 3.5h8.2L7.4 1.7l.9-.9L11.6 4 8.3 7.2l-.9-.9 1.8-1.8H1zm10 5H2.8l1.8 1.8-.9.9L.4 8l3.3-3.2.9.9-1.8 1.8H11z"/></svg>';
 
 const routeVar = i => i < 3 ? `--route-${i + 1}` : "--route-x";
-const rb = (labelTxt, i) => `<span class="rb" style="--c:var(${routeVar(i)})" title="Rota ${esc(labelTxt)}">${esc(labelTxt)}</span>`;
+const rb = (labelTxt, i) => `<span class="rb" style="--c:var(${routeVar(i)})" title="${t("route")} ${esc(labelTxt)}">${esc(labelTxt)}</span>`;
 
 // ---------- state ----------
 const RANGES = [[10800, "3 h"], [86400, "24 h"], [604800, "7 d"], [2592000, "30 d"]];
 const S = {
   ov: null, ovAt: 0, offline: false, filter: null, q: "",
   id: null, det: null, detErr: null, range: +store.get("range", 86400) || 86400,
-  sel: null, vs: "route", trace: null, hover: null, geo: null,
+  sel: null, vs: "route", trace: null, hover: null, geo: null, src: store.get("src", "") || "",
 };
+const srcQ = () => S.src ? `&src=${encodeURIComponent(S.src)}` : "";
 
 async function api(path) {
   const r = await fetch(path, { cache: "no-store" });
@@ -267,7 +363,10 @@ function setOffline(on) {
 
 async function refresh() {
   try {
-    S.ov = await api("/api/overview");
+    let ov;
+    try { ov = await api(`/api/overview?${srcQ().slice(1)}`); }
+    catch (e) { if (e.status !== 400 || !S.src) throw e; S.src = ""; ov = await api("/api/overview"); }   // that source is gone
+    S.ov = ov; S.src = ov.source;
     S.ovAt = Date.now();
     setOffline(false);
   } catch { setOffline(true); }
@@ -276,7 +375,7 @@ async function refresh() {
 }
 
 function tick() {
-  $("#updated").textContent = S.ovAt ? `Atualizado ${ago((Date.now() - S.ovAt) / 1000)}` : "";
+  $("#updated").textContent = S.ovAt ? t("updated", ago((Date.now() - S.ovAt) / 1000)) : "";
 }
 
 // ---------- header ----------
@@ -285,12 +384,22 @@ function renderChips() {
   for (const t of S.ov?.targets || []) n[t.status]++;
   $("#chips").innerHTML = ORDER.map(st =>
     `<button class="chip" data-st="${st}" aria-pressed="${S.filter === st}" ${n[st] ? "" : "data-zero"}
-      title="Mostrar só: ${LABEL[st]}" aria-label="${n[st]} ${LABEL[st]}">${icon(st)}<b>${n[st]}</b><span class="lbl">${LABEL[st]}</span></button>`).join("");
+      title="${t("showOnly", t(st))}" aria-label="${n[st]} ${t(st)}">${icon(st)}<b>${n[st]}</b><span class="lbl">${t(st)}</span></button>`).join("");
   const bad = n.down + n.crit;
   const worst = ORDER.find(st => n[st] && st !== "stale") || "ok";
   const col = { down: "#d03b3b", crit: "#ec835a", warn: "#fab219", ok: "#0ca30c" }[worst];
   $("#fav").href = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="${col}"/></svg>`)}`;
   document.title = (bad ? `(${bad}) ` : "") + (S.det ? `${S.det.target.name} · smoketrace` : "smoketrace");
+}
+
+// ---------- sources (where the probes run) ----------
+function srcSeg() {
+  const srcs = S.ov?.sources || [];
+  if (srcs.length < 2) return "";
+  return `<div class="srcbar"><span class="k">${t("cSeen")}</span><div class="seg sm" role="group" aria-label="${t("srcAria")}">${srcs.map(s => {
+    const late = !s.last_ts || S.ov.now - s.last_ts > 3 * S.ov.step;
+    return `<button data-src="${esc(s.name)}" aria-pressed="${s.name === S.src}">${late ? icon("stale") : ""}${esc(s.name)}</button>`;
+  }).join("")}</div></div>`;
 }
 
 // ---------- overview ----------
@@ -300,53 +409,57 @@ function renderOverview() {
   const v = $("#view");
   v.dataset.view = "ov";
   if (!S.ov) {
-    v.innerHTML = S.offline ? empty("Sem ligação ao smoketrace", "Confirma que o serviço está a correr.")
+    v.innerHTML = S.offline ? empty(t("noConnT"), t("noConnB"))
       : `<div class="tablewrap" aria-busy="true">${'<div class="skel"></div>'.repeat(6)}</div>`;
     return;
   }
   const all = S.ov.targets;
-  if (!all.length) { v.innerHTML = empty("Sem alvos configurados", "Adiciona alvos ao <code>targets.ini</code> e reinicia o serviço."); return; }
+  if (!all.length) { v.innerHTML = empty(t("noTargetsT"), t("noTargetsB")); return; }
   const q = S.q.trim().toLowerCase();
   const rows = all.filter(t => (!S.filter || t.status === S.filter) && (!q || `${t.name} ${t.host} ${t.group}`.toLowerCase().includes(q)));
   if (!rows.length) {
-    v.innerHTML = empty("Nenhum alvo corresponde ao filtro", '<button class="btn" data-act="clear">Limpar filtros</button>');
+    v.innerHTML = empty(t("noMatch"), `<button class="btn" data-act="clear">${t("clear")}</button>`);
     return;
   }
   const groups = new Map();
   for (const t of rows) { if (!groups.has(t.group)) groups.set(t.group, []); groups.get(t.group).push(t); }
-  let h = `<div class="tablewrap"><table class="targets"><thead><tr>
-    <th scope="col">Estado</th><th scope="col">Alvo</th><th scope="col" class="num">Mediana</th>
-    <th scope="col" class="num col-jit">Jitter</th><th scope="col" class="num">Perda</th>
-    <th scope="col" class="col-spark">Mediana · 24 h</th><th scope="col">Rota · 24 h</th><th scope="col" class="num col-age">Ronda</th>
+  const multi = S.ov.sources.length > 1, cols = multi ? 9 : 8;
+  let h = `${srcSeg()}<div class="tablewrap"><table class="targets"><thead><tr>
+    <th scope="col">${t("cStatus")}</th><th scope="col">${t("cTarget")}</th><th scope="col" class="num">${t("cMedian")}</th>
+    <th scope="col" class="num col-jit">Jitter</th><th scope="col" class="num">${t("cLoss")}</th>
+    <th scope="col" class="col-spark">${t("cSpark")}</th><th scope="col">${t("cRoute")}</th>
+    ${multi ? `<th scope="col">${t("cSeen")}</th>` : ""}<th scope="col" class="num col-age">${t("cRound")}</th>
   </tr></thead>`;
   for (const [g, ts] of groups) {
-    ts.sort((a, b) => SEV[b.status] - SEV[a.status] || a.name.localeCompare(b.name, "pt"));
-    h += `<tbody><tr class="grp"><th colspan="8" scope="rowgroup">${esc(g)}<span>${ts.length}</span></th></tr>${ts.map(rowHtml).join("")}</tbody>`;
+    ts.sort((a, b) => SEV[b.status] - SEV[a.status] || a.name.localeCompare(b.name, LOC));
+    h += `<tbody><tr class="grp"><th colspan="${cols}" scope="rowgroup">${esc(g)}<span>${ts.length}</span></th></tr>${ts.map(rowHtml).join("")}</tbody>`;
   }
   v.innerHTML = h + "</table></div>";
 }
 
-function rowHtml(t) {
+function rowHtml(tg) {
   const now = S.ov.now;
-  const d = t.median != null && t.baseline ? t.median - t.baseline : 0;
-  const delta = d >= Math.max(2, t.baseline * 0.2) ? `<span class="delta" title="Acima da mediana das últimas 24 h (${msU(t.baseline)})">▲${NB}+${ms(d)}</span>` : "";
-  const route = t.route_changes
-    ? `<span class="chg">${SWAP}${plural(t.route_changes, "mudança", "mudanças")}</span><small>última ${ago(now - t.last_change)}</small>`
-    : `<span class="muted">estável</span>`;
-  return `<tr class="row s-${t.status}" data-id="${esc(t.id)}">
-    <td>${pill(t.status)}</td>
-    <td class="name"><a href="#/t/${esc(t.id)}">${esc(t.name)}</a><span class="mono">${esc(t.host)}</span></td>
-    <td class="num">${msU(t.median)}${delta}</td>
-    <td class="num col-jit">${msU(t.jitter)}</td>
-    <td class="num${t.loss > 0 ? " lossy" : ""}">${pct(t.loss)}</td>
-    <td class="col-spark">${spark(t, now)}</td>
-    <td>${route}</td>
-    <td class="num col-age">${t.last_ts ? ago(now - t.last_ts) : "—"}</td>
+  const d = tg.median != null && tg.baseline ? tg.median - tg.baseline : 0;
+  const delta = d >= Math.max(2, tg.baseline * 0.2) ? `<span class="delta" title="${esc(t("aboveBase", msU(tg.baseline)))}">▲${NB}+${ms(d)}</span>` : "";
+  const route = tg.route_changes
+    ? `<span class="chg">${SWAP}${t("changes", tg.route_changes)}</span><small>${t("lastAgo", ago(now - tg.last_change))}</small>`
+    : `<span class="muted">${t("stable")}</span>`;
+  const seen = !tg.by_source ? "" : `<td class="srcs">${Object.entries(tg.by_source).map(([s, st]) =>
+    `<span class="sv" title="${esc(s)}: ${t(st)}">${icon(st)}${esc(s)}</span>`).join("")}</td>`;
+  return `<tr class="row s-${tg.status}" data-id="${esc(tg.id)}">
+    <td>${pill(tg.status)}</td>
+    <td class="name"><a href="#/t/${esc(tg.id)}">${esc(tg.name)}</a><span class="mono">${esc(tg.host)}</span></td>
+    <td class="num">${msU(tg.median)}${delta}</td>
+    <td class="num col-jit">${msU(tg.jitter)}</td>
+    <td class="num${tg.loss > 0 ? " lossy" : ""}">${pct(tg.loss)}</td>
+    <td class="col-spark">${spark(tg, now)}</td>
+    <td>${route}</td>${seen}
+    <td class="num col-age">${tg.last_ts ? ago(now - tg.last_ts) : "—"}</td>
   </tr>`;
 }
 
-function spark(t, now) {
-  const W = 156, H = 30, pts = t.spark;
+function spark(tg, now) {
+  const W = 156, H = 30, pts = tg.spark;
   const meds = pts.map(p => p[1]).filter(v => v != null);
   if (!pts.length) return '<span class="muted">—</span>';
   const ymax = Math.max(...meds, 0.1) * 1.15, from = now - 86400;
@@ -359,7 +472,7 @@ function spark(t, now) {
       loss += `<rect x="${X(ts)}" y="${H - 1 - (1 + l / 100 * 5)}" width="1.6" height="${1 + l / 100 * 5}" fill="var(${l >= 20 ? "--critical" : "--warning"})"/>`;
     }
   }
-  const lbl = meds.length ? `Mediana nas últimas 24 h entre ${msU(Math.min(...meds))} e ${msU(Math.max(...meds))}; perda máxima ${pct(maxLoss)}` : "Sem respostas nas últimas 24 h";
+  const lbl = meds.length ? t("sparkLbl", msU(Math.min(...meds)), msU(Math.max(...meds)), pct(maxLoss)) : t("sparkNone");
   return `<svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${lbl}"><title>${lbl}</title>
     <path d="${d}" fill="none" stroke="var(--ink-2)" stroke-width="1.4" stroke-linejoin="round"/>${loss}</svg>`;
 }
@@ -374,7 +487,7 @@ async function openTarget(id) {
 async function loadDetail() {
   const id = S.id;
   try {
-    const d = await api(`/api/target?id=${encodeURIComponent(id)}&range=${S.range}`);
+    const d = await api(`/api/target?id=${encodeURIComponent(id)}&range=${S.range}${srcQ()}`);
     if (S.id !== id) return;
     S.det = d; S.detErr = null;
   } catch (e) {
@@ -389,7 +502,7 @@ async function loadDetail() {
 async function loadTrace() {
   const id = S.id;
   try {
-    const tr = await api(`/api/trace?id=${encodeURIComponent(id)}&vs=${S.vs}${S.sel ? `&ts=${S.sel}` : ""}`);
+    const tr = await api(`/api/trace?id=${encodeURIComponent(id)}&vs=${S.vs}${S.sel ? `&ts=${S.sel}` : ""}${srcQ()}`);
     if (S.id === id) S.trace = tr;
   } catch { if (S.id === id) S.trace = { error: true }; }
   renderTrace(); drawChart();
@@ -399,52 +512,54 @@ function renderDetail() {
   const v = $("#view");
   if (S.detErr === "notfound") {
     v.dataset.view = "nf";
-    v.innerHTML = empty("Alvo não encontrado", 'Pode ter sido removido do <code>targets.ini</code>. <a href="#/">Ver todos os alvos</a>');
+    v.innerHTML = empty(t("notFoundT"), t("notFoundB"));
     return;
   }
   if (v.dataset.view !== "t:" + S.id) {
     v.dataset.view = "t:" + S.id;
     v.innerHTML = `
-      <nav class="crumbs"><a href="#/">← Todos os alvos</a></nav>
+      <nav class="crumbs"><a href="#/">${t("allTargets")}</a></nav>
       <section class="dhead" id="dhead"></section>
       <section class="kpis" id="kpis"></section>
       <div class="toolbar">
-        <div class="seg" role="group" aria-label="Intervalo de tempo">${RANGES.map(([s, l]) => `<button data-range="${s}">${l}</button>`).join("")}</div>
-        <span class="hint">Clica no gráfico (ou ← → e Enter) para abrir o traceroute desse momento.</span>
+        <div class="seg" role="group" aria-label="${t("rangeAria")}">${RANGES.map(([s, l]) => `<button data-range="${s}">${l}</button>`).join("")}</div>
+        <span id="srcd"></span>
+        <span class="hint">${t("hint")}</span>
       </div>
       <section class="card">
-        <div class="card-h"><h2>Latência, perda e rota</h2><div class="legend" id="legend"></div></div>
-        <div class="chart-wrap"><canvas id="chart" tabindex="0" role="img" aria-label="Gráfico de latência"></canvas><div class="tip" id="tip" hidden></div></div>
+        <div class="card-h"><h2>${t("chartTitle")}</h2><div class="legend" id="legend"></div></div>
+        <div class="chart-wrap"><canvas id="chart" tabindex="0" role="img" aria-label="${t("chartAria")}"></canvas><div class="tip" id="tip" hidden></div></div>
       </section>
       <section class="card" id="trace" aria-live="polite"></section>
-      <details class="card" id="rawd"><summary>Dados em tabela</summary><div id="raw"></div></details>`;
+      <details class="card" id="rawd"><summary>${t("rawTitle")}</summary><div id="raw"></div></details>`;
   }
   for (const b of v.querySelectorAll("[data-range]")) b.setAttribute("aria-pressed", +b.dataset.range === S.range);
+  $("#srcd").innerHTML = srcSeg();
   const d = S.det;
   if (!d) {
-    $("#dhead").innerHTML = `<div><div class="eyebrow">&nbsp;</div><h1>A carregar…</h1></div>`;
+    $("#dhead").innerHTML = `<div><div class="eyebrow">&nbsp;</div><h1>${t("loading")}</h1></div>`;
     $("#kpis").innerHTML = "";
     renderTrace(); drawChart();
     return;
   }
-  const t = d.target, segs = d.segments, cur = segs[segs.length - 1];
+  const tg = d.target, segs = d.segments, cur = segs[segs.length - 1];
   const changes = segs.filter(s => s.change).length;
-  $("#dhead").innerHTML = `<div><div class="eyebrow">${esc(t.group)}</div><h1>${esc(t.name)}</h1><div class="mono muted">${esc(t.host)}</div></div>${pill(t.status)}`;
+  $("#dhead").innerHTML = `<div><div class="eyebrow">${esc(tg.group)}</div><h1>${esc(tg.name)}</h1><div class="mono muted">${esc(tg.host)}</div></div>${pill(tg.status)}`;
   const rangeLbl = RANGES.find(r => r[0] === S.range)?.[1] || "";
   const kpi = (k, v, s) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   $("#kpis").innerHTML =
-    kpi("Mediana", msU(t.median), t.baseline ? `base 24 h: ${msU(t.baseline)}` : "sem base ainda") +
-    kpi("Jitter", msU(t.jitter), "média |Δ| entre respostas") +
-    kpi("Perda", pct(t.loss), `última ronda · ${d.pings} pings`) +
-    kpi("Rota atual", cur ? `${rb(cur.label, cur.route)}<small>${plural(cur.hops, "salto", "saltos")}</small>` : "—",
-      cur ? `desde ${at(cur.from)}` : "ainda sem traceroute") +
-    kpi(`Mudanças · ${rangeLbl}`, String(changes), changes ? `última ${at(segs.filter(s => s.change).pop().from)}` : "rota estável");
+    kpi(t("cMedian"), msU(tg.median), tg.baseline ? t("base", msU(tg.baseline)) : t("noBase")) +
+    kpi("Jitter", msU(tg.jitter), t("jitterSub")) +
+    kpi(t("cLoss"), pct(tg.loss), t("lossSub", d.pings)) +
+    kpi(t("curRoute"), cur ? `${rb(cur.label, cur.route)}<small>${t("hops", cur.hops)}</small>` : "—",
+      cur ? t("since", at(cur.from)) : t("noTrace")) +
+    kpi(t("changesK", rangeLbl), String(changes), changes ? t("lastAgo", at(segs.filter(s => s.change).pop().from)) : t("stableRoute"));
   const routes = [...new Map(segs.map(s => [s.route, s])).values()].sort((a, b) => a.route - b.route);
-  $("#legend").innerHTML = `<span><i class="lg-line"></i>Mediana</span>
-    <span><i class="lg-smoke"></i>Dispersão dos ${d.pings} pings</span>
-    <span><i class="lg-sq" style="--c:var(--warning)"></i>Perda &lt; ${d.loss_crit}${NB}%</span>
+  $("#legend").innerHTML = `<span><i class="lg-line"></i>${t("cMedian")}</span>
+    <span><i class="lg-smoke"></i>${t("smoke", d.pings)}</span>
+    <span><i class="lg-sq" style="--c:var(--warning)"></i>${esc(t("lossLt", d.loss_crit + NB + "%"))}</span>
     <span><i class="lg-sq" style="--c:var(--critical)"></i>≥ ${d.loss_crit}${NB}%</span>
-    ${routes.length ? `<span>Rotas ${routes.map(s => rb(s.label, s.route)).join(" ")}</span>` : ""}`;
+    ${routes.length ? `<span>${t("routes")} ${routes.map(s => rb(s.label, s.route)).join(" ")}</span>` : ""}`;
   renderChips(); drawChart(); renderTrace();
   if ($("#rawd").open) renderRaw();
 }
@@ -483,8 +598,8 @@ function drawChart() {
   const line = (a, b, c, e) => { g.beginPath(); g.moveTo(a, b); g.lineTo(c, e); g.stroke(); };
   if (!d || !d.points.length) {
     g.fillStyle = C["--ink-2"]; g.textAlign = "center"; g.font = "13px system-ui, sans-serif";
-    g.fillText(d ? "À espera da primeira ronda — os dados aparecem em ≤ 5 min." : "A carregar…", W / 2, H / 2);
-    S.geo = null; cv.setAttribute("aria-label", "Sem dados"); return;
+    g.fillText(d ? t("waiting") : t("loading"), W / 2, H / 2);
+    S.geo = null; cv.setAttribute("aria-label", t("noData")); return;
   }
   const { from, to, points: pts } = d;
   const X = ts => x0 + (ts - from) / (to - from) * pw;
@@ -504,7 +619,7 @@ function drawChart() {
     g.fillStyle = C["--muted"]; g.fillText(tv === ymax ? `${fmtTick(tv)} ms` : fmtTick(tv), x0 - 8, y);
   }
   g.fillStyle = C["--muted"];
-  g.fillText("perda", x0 - 8, ly0 + L.lh / 2); g.fillText("rota", x0 - 8, ry0 + L.rh / 2);
+  g.fillText(t("lossAxis"), x0 - 8, ly0 + L.lh / 2); g.fillText(t("routeAxis"), x0 - 8, ry0 + L.rh / 2);
   g.strokeStyle = C["--grid"]; line(x0, ly0 + 0.5, x1, ly0 + 0.5);
   g.strokeStyle = C["--axis"]; line(x0, ly1 + 0.5, x1, ly1 + 0.5);
 
@@ -552,8 +667,8 @@ function drawChart() {
   const step = steps.find(s => span / s <= pw / 84) || 604800;
   const off = new Date().getTimezoneOffset() * 60;
   g.fillStyle = C["--muted"]; g.strokeStyle = C["--axis"]; g.lineWidth = 1;
-  for (let t = Math.ceil((from - off) / step) * step + off; t <= to; t += step) {
-    const x = Math.round(X(t)) + 0.5, dt = new Date(t * 1000);
+  for (let tt = Math.ceil((from - off) / step) * step + off; tt <= to; tt += step) {
+    const x = Math.round(X(tt)) + 0.5, dt = new Date(tt * 1000);
     line(x, ry1 + 2, x, ry1 + 6);
     const midnight = dt.getHours() === 0 && dt.getMinutes() === 0;
     g.fillText(step >= 86400 || midnight ? fD.format(dt) : fT.format(dt), x, ry1 + 15);
@@ -576,7 +691,7 @@ function drawChart() {
     }
   }
   S.geo = { x0, x1, X, bw, W };
-  cv.setAttribute("aria-label", `Latência de ${d.target.name}: mediana entre ${msU(Math.min(...meds))} e ${msU(Math.max(...meds))}, ${plural(d.segments.filter(s => s.change).length, "mudança", "mudanças")} de rota. Tabela de dados disponível abaixo.`);
+  cv.setAttribute("aria-label", t("chartLbl", d.target.name, msU(Math.min(...meds)), msU(Math.max(...meds)), t("changes", d.segments.filter(s => s.change).length)));
 }
 
 function nearest(x) {
@@ -593,11 +708,11 @@ function showTip(i) {
   const seg = segAt(p[0]), s = p[4];
   const bucketed = S.det.bucket > 300;
   tip.innerHTML = `<b>${at(p[0])}</b>${bucketed ? ` <span class="muted">· ${Math.round(S.det.bucket / 60)} min</span>` : ""}
-    <dl><dt>Mediana</dt><dd>${msU(p[1])}</dd>
-    <dt>Mín – máx</dt><dd>${s.length ? `${ms(s[0])} – ${ms(s[s.length - 1])}${NB}ms` : "—"}</dd>
-    <dt>Perda</dt><dd>${pct(p[2])}</dd><dt>Jitter</dt><dd>${msU(p[3])}</dd>
-    <dt>Rota</dt><dd>${seg ? rb(seg.label, seg.route) : "—"}</dd></dl>
-    <div class="tip-f">Clica para ver o traceroute</div>`;
+    <dl><dt>${t("cMedian")}</dt><dd>${msU(p[1])}</dd>
+    <dt>${t("minMax")}</dt><dd>${s.length ? `${ms(s[0])} – ${ms(s[s.length - 1])}${NB}ms` : "—"}</dd>
+    <dt>${t("cLoss")}</dt><dd>${pct(p[2])}</dd><dt>Jitter</dt><dd>${msU(p[3])}</dd>
+    <dt>${t("route")}</dt><dd>${seg ? rb(seg.label, seg.route) : "—"}</dd></dl>
+    <div class="tip-f">${t("clickTrace")}</div>`;
   tip.hidden = false;
   const x = S.geo.X(p[0]) + S.geo.bw / 2, w = tip.offsetWidth;
   tip.style.left = `${x + 14 + w > S.geo.W ? Math.max(0, x - 14 - w) : x + 14}px`;
@@ -620,26 +735,24 @@ function selectPoint(i) {
 
 // ---------- traceroute diff ----------
 const STATE = {
-  same: ['<span class="badge same">= igual</span>'],
-  changed: [`<span class="badge">${SWAP}mudou</span>`],
-  added: ['<span class="badge">+ novo</span>'],
-  removed: ['<span class="badge">− saiu</span>'],
-  unknown: ['<span class="badge same">? sem resposta</span>'],
+  same: [`<span class="badge same">${t("same")}</span>`],
+  changed: [`<span class="badge">${SWAP}${t("changed")}</span>`],
+  added: [`<span class="badge">${t("added")}</span>`],
+  removed: [`<span class="badge">${t("removed")}</span>`],
+  unknown: [`<span class="badge same">${t("unknown")}</span>`],
 };
-const RL_TIP = "A perda neste salto não continua até ao destino: o router está a limitar (rate-limit) ou a despriorizar respostas ICMP. Não é perda real.";
-const REAL_TIP = "A perda começa neste salto e mantém-se até ao destino: é aqui (ou na ligação para aqui) que o problema começa.";
 
 function ipCell(h) {
   if (!h) return '<span class="muted">—</span>';
-  return h.ip ? `<span class="ipc mono">${esc(h.ip)}</span>` : '<span class="ipc mono silent" title="Não respondeu a ICMP (normal em muitos routers)">???</span>';
+  return h.ip ? `<span class="ipc mono">${esc(h.ip)}</span>` : `<span class="ipc mono silent" title="${t("silentTip")}">???</span>`;
 }
 
 function lossCell(h, origin) {
   if (!h || !h.ip) return '<span class="muted">—</span>';
   if (h.loss <= 0) return '<span class="muted">0' + NB + "%</span>";
   const real = origin != null && h.ttl >= origin;
-  const tag = real ? (h.ttl === origin ? `<span class="tag tag-real" title="${REAL_TIP}">${icon("down")}perda real começa aqui</span>` : "")
-    : `<span class="tag" title="${RL_TIP}">rate-limit</span>`;
+  const tag = real ? (h.ttl === origin ? `<span class="tag tag-real" title="${t("realTip")}">${icon("down")}${t("realStarts")}</span>` : "")
+    : `<span class="tag" title="${t("rlTip")}">rate-limit</span>`;
   return `<span class="${real ? "dl" : ""}">${pct(h.loss)}</span>${tag}`;
 }
 
@@ -648,12 +761,12 @@ function renderTrace() {
   if (!el) return;
   const tr = S.trace;
   const head = `<div class="card-h"><h2>Traceroute (mtr)</h2>
-    <div class="seg sm" role="group" aria-label="Comparar com">
-      <button data-vs="route" aria-pressed="${S.vs === "route"}">vs. rota anterior</button>
-      <button data-vs="round" aria-pressed="${S.vs === "round"}">vs. ronda anterior</button></div></div>`;
-  if (!tr) { el.innerHTML = head + '<div class="empty">A carregar…</div>'; return; }
-  if (tr.error) { el.innerHTML = head + empty("Não foi possível carregar o traceroute", '<button class="btn" data-act="retrace">Tentar de novo</button>'); return; }
-  if (!tr.cur) { el.innerHTML = head + empty("Ainda sem traceroutes", "O primeiro mtr corre na próxima ronda (≤ 5 min)."); return; }
+    <div class="seg sm" role="group" aria-label="${t("compareAria")}">
+      <button data-vs="route" aria-pressed="${S.vs === "route"}">${t("vsRoute")}</button>
+      <button data-vs="round" aria-pressed="${S.vs === "round"}">${t("vsRound")}</button></div></div>`;
+  if (!tr) { el.innerHTML = head + `<div class="empty">${t("loading")}</div>`; return; }
+  if (tr.error) { el.innerHTML = head + empty(t("traceErr"), `<button class="btn" data-act="retrace">${t("tryAgain")}</button>`); return; }
+  if (!tr.cur) { el.innerHTML = head + empty(t("noTracesT"), t("noTracesB")); return; }
   const { cur, prev, rows } = tr;
   const n = st => rows.filter(r => r.state === st).length;
   const nc = n("changed"), na = n("added"), nr = n("removed"), nu = n("unknown");
@@ -661,12 +774,11 @@ function renderTrace() {
   const dc = lastOf(cur.hops), dp = prev && lastOf(prev.hops);
   const dDest = dc && dp && dc.ip === dp.ip ? dc.avg - dp.avg : null;   // only when both reached the same last hop
   const tail = cur.hops[cur.hops.length - 1];
-  const stuck = tail && !tail.ip && dc ? `O traceroute não chega ao destino: a última resposta vem do salto ${dc.ttl} (${esc(dc.ip)}).` : "";
-  const parts = [nc && plural(nc, "salto mudou", "saltos mudaram"), na && plural(na, "novo", "novos"),
-    nr && plural(nr, "saiu", "saíram"), nu && `${nu} sem resposta`].filter(Boolean);
-  const sum = !prev ? "Sem traceroute anterior."
-    : (parts.length ? parts.join(" · ") : "Mesmos saltos")
-      + (dDest != null ? ` · destino ${dDest >= 0 ? "+" : "−"}${ms(Math.abs(dDest))}${NB}ms` : "");
+  const stuck = tail && !tail.ip && dc ? t("stuck", dc.ttl, esc(dc.ip)) : "";
+  const parts = [nc && t("hopsChanged", nc), na && t("nNew", na), nr && t("nGone", nr), nu && t("nSilent", nu)].filter(Boolean);
+  const sum = !prev ? t("noPrev")
+    : (parts.length ? parts.join(" · ") : t("sameHops"))
+      + (dDest != null ? ` · ${t("dest")} ${dDest >= 0 ? "+" : "−"}${ms(Math.abs(dDest))}${NB}ms` : "");
   const maxAvg = Math.max(1, ...cur.hops.map(h => h.avg || 0));
   const prevAvg = new Map((prev?.hops || []).map(h => [h.ttl, h.avg]));
   const body = rows.map(r => {
@@ -685,19 +797,19 @@ function renderTrace() {
   }).join("");
   el.innerHTML = head + `
     <div class="tmeta">
-      <div><span class="k">Agora</span>${rb(cur.label, cur.route)}<b>${at(cur.ts)}</b>
-        ${S.sel ? '<button class="link" data-act="latest">ir para o mais recente</button>' : '<span class="muted">mais recente</span>'}</div>
-      <div><span class="k">Antes</span>${prev ? `${rb(prev.label, prev.route)}<span>${at(prev.ts)}</span>` : '<span class="muted">—</span>'}</div>
+      <div><span class="k">${t("now")}</span>${rb(cur.label, cur.route)}<b>${at(cur.ts)}</b>
+        ${S.sel ? `<button class="link" data-act="latest">${t("goLatest")}</button>` : `<span class="muted">${t("latest")}</span>`}</div>
+      <div><span class="k">${t("before")}</span>${prev ? `${rb(prev.label, prev.route)}<span>${at(prev.ts)}</span>` : '<span class="muted">—</span>'}</div>
       <div class="tsum">${sum}</div>
     </div>
     ${stuck ? `<p class="note note-bad">${icon("down")} ${stuck}</p>` : ""}
-    ${tr.fallback ? '<p class="note">Sem mudança de rota no histórico deste alvo — a comparar com a ronda anterior.</p>' : ""}
+    ${tr.fallback ? `<p class="note">${t("fallback")}</p>` : ""}
     <div class="tablewrap"><table class="hops"><thead><tr>
-      <th scope="col" class="num">#</th>${prev ? '<th scope="col">Antes</th>' : ""}<th scope="col">Agora</th>
-      <th scope="col" class="num">Perda</th><th scope="col" class="num">Média</th><th scope="col" class="num">Desvio</th>
-      ${prev ? '<th scope="col" class="num">Δ média</th><th scope="col">Salto</th>' : ""}
+      <th scope="col" class="num">#</th>${prev ? `<th scope="col">${t("before")}</th>` : ""}<th scope="col">${t("now")}</th>
+      <th scope="col" class="num">${t("cLoss")}</th><th scope="col" class="num">${t("cAvg")}</th><th scope="col" class="num">${t("cSd")}</th>
+      ${prev ? `<th scope="col" class="num">${t("cDelta")}</th><th scope="col">${t("cHop")}</th>` : ""}
     </tr></thead><tbody>${body}</tbody></table></div>
-    <p class="foot">Perda só num salto intermédio = rate-limit de ICMP, não perda real. Conta a perda que começa num salto e se mantém até ao destino.</p>`;
+    <p class="foot">${t("foot")}</p>`;
 }
 
 function renderRaw() {
@@ -709,9 +821,9 @@ function renderRaw() {
       <td class="num">${s.length ? msU(s[s.length - 1]) : "—"}</td><td class="num">${pct(p[2])}</td><td class="num">${msU(p[3])}</td>
       <td>${seg ? esc(seg.label) : "—"}</td></tr>`;
   }).join("");
-  $("#raw").innerHTML = `<div class="tablewrap"><table><thead><tr><th scope="col">Hora</th><th scope="col" class="num">Mediana</th>
-    <th scope="col" class="num">Mín</th><th scope="col" class="num">Máx</th><th scope="col" class="num">Perda</th>
-    <th scope="col" class="num">Jitter</th><th scope="col">Rota</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  $("#raw").innerHTML = `<div class="tablewrap"><table><thead><tr><th scope="col">${t("cTime")}</th><th scope="col" class="num">${t("cMedian")}</th>
+    <th scope="col" class="num">${t("cMin")}</th><th scope="col" class="num">${t("cMax")}</th><th scope="col" class="num">${t("cLoss")}</th>
+    <th scope="col" class="num">Jitter</th><th scope="col">${t("route")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 // ---------- events ----------
@@ -723,7 +835,7 @@ function route() {
 }
 
 document.addEventListener("click", e => {
-  const b = e.target.closest("[data-st],[data-range],[data-vs],[data-act],tr.row");
+  const b = e.target.closest("[data-st],[data-range],[data-vs],[data-src],[data-act],tr.row");
   if (!b) return;
   const ds = b.dataset;
   if (ds.st) {
@@ -733,6 +845,8 @@ document.addEventListener("click", e => {
   } else if (ds.range) {
     S.range = +ds.range; store.set("range", S.range); S.hover = null; $("#tip").hidden = true; loadDetail();
   } else if (ds.vs) { S.vs = ds.vs; loadTrace(); }
+  else if (ds.src) { S.src = ds.src; store.set("src", S.src); S.trace = null; S.sel = null; S.hover = null; refresh(); }
+  else if (ds.act === "lang") { store.set("lang", LANG === "pt" ? "en" : "pt"); location.reload(); }
   else if (ds.act === "latest") { S.sel = null; loadTrace(); }
   else if (ds.act === "retrace") loadTrace();
   else if (ds.act === "retry") refresh();
@@ -778,6 +892,12 @@ window.addEventListener("hashchange", route);
 new ResizeObserver(() => drawChart()).observe(view);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawChart(); if (S.ov && !S.id) renderOverview(); });
 
+$("#chips").setAttribute("aria-label", t("filterAria"));
+$("#q").placeholder = t("search");
+$("#banner span").textContent = t("offline");
+$("#banner button").textContent = t("retry");
+$("#lang").textContent = t("langBtn");
+$("#lang").title = t("langTitle");
 route();
 refresh();
 setInterval(refresh, 60000);

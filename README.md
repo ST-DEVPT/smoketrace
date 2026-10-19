@@ -15,12 +15,14 @@
   <a href="https://github.com/ST-DEVPT/smoketrace/releases"><img alt="Release" src="https://img.shields.io/github/v/release/ST-DEVPT/smoketrace?color=2a78d6"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%E2%80%933.14-3b7a39">
   <img alt="Dependencies" src="https://img.shields.io/badge/dependencies-none-3b7a39">
+  <a href="https://github.com/ST-DEVPT/smoketrace/pkgs/container/smoketrace"><img alt="Image" src="https://img.shields.io/badge/ghcr.io-amd64%20%7C%20arm64-2c6b8a"></a>
   <img alt="Probes: fping and mtr" src="https://img.shields.io/badge/probes-fping%20%2B%20mtr-2c6b8a">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-4f4d48"></a>
 </p>
 
 <p align="center">
   <a href="#quick-start"><b>Quick start</b></a> ·
+  <a href="#remote-agents">Remote agents</a> ·
   <a href="#reading-the-screen">Reading the screen</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#configuration">Configuration</a> ·
@@ -54,7 +56,8 @@ real loss starts, and which "loss" is only a router saying no to ICMP.
 | Where real loss starts | Read the mtr by eye | **Real loss starts here** on the first hop where it lasts to the end |
 | Two paths taking turns | Invisible | Every path gets a letter; the route strip shows A B A B |
 | The target stops answering | A red graph | Plus the last hop that still answers |
-| Running it | Perl, RRDtool, a web server, its own config language | One Python file, no dependencies, SQLite, a systemd unit |
+| Is it them or is it us? | Slaves: a Perl install and a shared secret per site | An agent container per site; every target shows how each site sees it |
+| Running it | Perl, RRDtool, a web server, its own config language | One container, or one Python file with no dependencies |
 
 ## At a glance
 
@@ -83,25 +86,45 @@ real loss starts, and which "loss" is only a router saying no to ICMP.
   hop: changed, new, gone, silent, and how much slower.
 - **Reads mtr for you**: loss that stops at one hop is rate-limiting; loss that starts at a hop and reaches the
   destination is real, and is marked where it starts.
-- **Made to be left alone**: one Python file, the standard library only, SQLite, 30 days kept, a hardened
-  systemd unit (dynamic user, `CAP_NET_RAW` only).
-- **Dark and light, desktop and phone**, the keyboard on the chart (<kbd>←</kbd> <kbd>→</kbd> <kbd>Enter</kbd>),
-  and a table of every point.
+- **Several vantage points**: agents at other sites probe the same targets and push their rounds; switch the
+  dashboard between them, and see at a glance whether a target is down from everywhere or from one place.
+- **Made to be left alone**: one Python file, the standard library only, SQLite, 30 days kept; a multi-arch
+  image with only `NET_RAW`, a read-only root and no-new-privileges.
+- **English and Portuguese, dark and light, desktop and phone**, the keyboard on the chart
+  (<kbd>←</kbd> <kbd>→</kbd> <kbd>Enter</kbd>), and a table of every point.
 
 ## Quick start
 
-### Try the demo (any OS, no probes)
+### Docker
 
 ```bash
-git clone https://github.com/ST-DEVPT/smoketrace && cd smoketrace
-python3 smoketrace.py --demo
+mkdir smoketrace && cd smoketrace
+curl -O https://raw.githubusercontent.com/ST-DEVPT/smoketrace/main/docker-compose.yml
+docker compose up -d
 ```
 
-Open <http://127.0.0.1:8099>. The demo seeds a week of six targets: a route change with loss on the new path
-(Cloudflare DNS), two paths taking turns (Google DNS), a router that rate-limits ICMP plus an hour of real loss
-(Quad9), and a server that just went down.
+The first start writes an example `data/targets.ini`. Put your targets in it (the folder belongs to root, as
+the container does: use `sudo`), then `docker compose restart`. Open `http://<docker-host>:8099`; the first
+round lands within five minutes. To update: `docker compose pull && docker compose up -d`.
 
-### Run it for real (Debian, Ubuntu)
+The compose file uses the host's network, so traceroutes start at your real gateway and not at Docker's
+bridge, and it gives the container `NET_RAW` and nothing else.
+
+> [!WARNING]
+> There is no login, and the server listens on every interface: keep it on a trusted network, or behind a
+> reverse proxy with authentication. See [SECURITY.md](SECURITY.md).
+
+### Try the demo
+
+```bash
+docker run --rm -p 8099:8099 -e DEMO=1 ghcr.io/st-devpt/smoketrace:latest
+```
+
+Or without Docker, on any OS: `python3 smoketrace.py --demo`. The demo seeds a week of six targets seen from
+two places: a route change with loss on the new path (Cloudflare DNS), two paths taking turns (Google DNS), a
+router that rate-limits ICMP plus an hour of real loss (Quad9), and a server that just went down for everyone.
+
+### Without Docker (Debian, Ubuntu)
 
 ```bash
 sudo apt install python3 fping mtr-tiny
@@ -111,16 +134,34 @@ sudo cp /opt/smoketrace/smoketrace.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now smoketrace
 ```
 
-Open `http://<host>:8099`; the first round lands within five minutes. To update: `git -C /opt/smoketrace pull`
-and `systemctl restart smoketrace`.
+## Remote agents
 
-> [!WARNING]
-> There is no login. The unit listens on every interface: keep it on a trusted network, or behind a reverse
-> proxy with authentication. See [SECURITY.md](SECURITY.md).
+An agent is the same image started with a server address and a token. It fetches the targets from the server,
+probes them from where it runs, and pushes every round. It needs no port and no storage: only an outgoing
+connection to the server. If the server is unreachable, it keeps up to a day of rounds and sends them later.
 
-Without systemd: `python3 smoketrace.py --targets targets.ini --bind 0.0.0.0`. If fping or mtr say
-*permission denied*, give them raw sockets (`sudo setcap cap_net_raw+ep $(which fping)`, same for
-`mtr-packet`) or run it as root.
+**1. On the server**, give each agent a name and a long random token (`openssl rand -hex 24`) in
+`docker-compose.yml`, then `docker compose up -d`:
+
+```yaml
+    environment:
+      NAME: home
+      AGENTS: porto=4f1c…a9e2,office=b7d0…13c5
+```
+
+**2. At each site**, run [`docker-compose.agent.yml`](docker-compose.agent.yml) with that site's token:
+
+```yaml
+    environment:
+      SERVER: http://smoketrace.lan:8099
+      TOKEN: 4f1c…a9e2
+```
+
+**3. In the dashboard**, *Seen from* switches between `home`, `porto` and `office`, and the overview shows how
+each of them sees every target: down from everywhere is the target; down from one place is the path from there.
+
+Over the internet, put the server behind HTTPS (a reverse proxy) or reach it through a VPN such as WireGuard:
+the token travels with every round.
 
 ## Configuration
 
@@ -135,13 +176,19 @@ Cloudflare DNS = 1.1.1.1
 Google DNS = 8.8.8.8
 ```
 
-| Option | Default | |
-| --- | --- | --- |
-| `--targets` | `targets.ini` next to the script | the file above |
-| `--db` | `smoketrace.db` next to the script | the SQLite database |
-| `--bind` | `127.0.0.1` | address to listen on |
-| `--port` | `8099` | |
-| `--demo` | off | synthetic data, no probes |
+Every option is an environment variable and a flag:
+
+| Variable | Flag | Default | |
+| --- | --- | --- | --- |
+| `TARGETS` | `--targets` | `/data/targets.ini` in the image | the file above |
+| `DB` | `--db` | `/data/smoketrace.db` in the image | the SQLite database |
+| `BIND` | `--bind` | `0.0.0.0` in the image, else `127.0.0.1` | address to listen on |
+| `PORT` | `--port` | `8099` | |
+| `NAME` | `--name` | `local` | what the dashboard calls the server's own probe |
+| `AGENTS` | `--agents` | none | agents allowed to push: `name=token,name=token` |
+| `SERVER` | `--agent` | none | run as an agent pushing to this server |
+| `TOKEN` | `--token` | none | the agent's token |
+| `DEMO` | `--demo` | off | `1`: synthetic data, no probes |
 
 The rest are constants at the top of [`smoketrace.py`](smoketrace.py), set to SmokePing's defaults:
 
@@ -185,6 +232,8 @@ flowchart LR
   R --> M["mtr --json -c 10<br>one per target, in parallel"]
   F --> DB[("SQLite<br>30 days")]
   M --> DB
+  AG["Agents at other sites<br>same probes, same minutes"] -- "push, one round at a time" --> DB
+  T -. "targets" .-> AG
   DB --> A["JSON API"] --> U["Dashboard"]
 ```
 
@@ -196,6 +245,8 @@ flowchart LR
   now and then do not fake a change.
 - **Rows, not RRD.** Raw rounds stay in SQLite for 30 days; longer chart ranges are bucketed as they are read
   (600 points at most), so the smoke of a 30-day view is still the real spread.
+- **Every source is kept apart.** The server's own probe and each agent have their own rows, routes and route
+  letters; an agent's round is checked field by field before it is stored.
 - **Status** comes from the last round: down at 100 % loss, critical from 20 %, warning from 5 % or when the
   median runs well above its 24-hour baseline, no data after three missed rounds.
 
@@ -203,18 +254,17 @@ flowchart LR
 
 | Endpoint | Returns |
 | --- | --- |
-| `GET /api/overview` | every target: status, last round, 24 h baseline, sparkline, route changes |
-| `GET /api/target?id=…&range=86400` | points `[ts, median, loss, jitter, smoke]`, route segments, thresholds |
-| `GET /api/trace?id=…&ts=…&vs=route` | the traceroute at `ts` (the latest without it), the one it is compared with (`vs=route` or `round`) and the hop-by-hop diff |
+| `GET /api/overview?src=…` | every target as one source sees it, plus each source's status for it |
+| `GET /api/target?id=…&range=86400&src=…` | points `[ts, median, loss, jitter, smoke]`, route segments, thresholds |
+| `GET /api/agent/targets`, `POST /api/agent/push` | for agents only, with `Authorization: Bearer <token>` |
+| `GET /api/trace?id=…&ts=…&vs=route&src=…` | the traceroute at `ts` (the latest without it), the one it is compared with (`vs=route` or `round`) and the hop-by-hop diff |
 
 ## Limits
 
-- One vantage point, the machine it runs on: no SmokePing-style slaves.
 - No alerts yet; the overview, the tab title and the favicon carry the worst state.
 - mtr's JSON keeps one IP per hop, so ECMP (several equal-cost paths) shows as routes taking turns.
   paris-traceroute would pin the flow.
-- No login (see the warning above).
-- The interface is in Portuguese (pt-PT).
+- No login (see the warning above); agents authenticate with their token.
 
 ## Development
 
@@ -224,7 +274,7 @@ python3 smoketrace.py --demo    # the dashboard against a week of synthetic data
 python3 docs/screenshots.py     # regenerates the images in docs/ (needs Playwright)
 ```
 
-CI runs the tests on Python 3.10 to 3.14, the demo end to end, and a real round of fping and mtr
-against the runner itself.
+CI runs the tests on Python 3.10 to 3.14, the demo end to end, a real round of fping and mtr against the
+runner itself, and the image as shipped: a server and an agent, each with only `NET_RAW`, probing for real.
 
 <p align="center"><sub>Made in Portugal 🇵🇹 by <a href="https://github.com/ST-DEVPT">ST-DEVPT</a> · tools for the homelab, built to be left alone.</sub></p>

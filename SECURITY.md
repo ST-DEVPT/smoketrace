@@ -1,12 +1,16 @@
 # Security
 
 smoketrace has no login. Anyone who can reach its port sees your targets, their addresses, the routes to them
-and their history. Nobody can change anything through it: the API only reads.
+and their history. The dashboard and its API only read; the only thing that writes is an agent's push, and
+that needs the agent's token.
 
-- It listens on `127.0.0.1` unless told otherwise; the systemd unit uses `--bind 0.0.0.0` for the LAN. Keep it
-  on a trusted network, or put it behind a reverse proxy with authentication.
-- The systemd unit runs it as a dynamic, unprivileged user with one capability, `CAP_NET_RAW`, which fping and
-  mtr need for ICMP.
+- The image listens on every interface (`BIND=0.0.0.0`); outside Docker it listens on `127.0.0.1` unless told
+  otherwise. Keep it on a trusted network, or put it behind a reverse proxy with authentication.
+- The container runs with one capability, `NET_RAW` (what fping and mtr need for ICMP), a read-only root and
+  no-new-privileges. The systemd unit runs it as a dynamic, unprivileged user with the same single capability.
+- **Agents** authenticate with a token of at least 16 characters, compared in constant time. Every pushed
+  round is rebuilt from known fields only: targets the server has, numbers in range, hop addresses that are IP
+  addresses. The token travels with every round, so over the internet put the server behind HTTPS or a VPN.
 - Targets come only from `targets.ini`, and a host that could be read as a command-line option is refused.
 
 ## Reporting a vulnerability

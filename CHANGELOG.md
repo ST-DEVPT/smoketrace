@@ -2,6 +2,22 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.2.0] - 2026-10-19
+
+- **Docker**: a multi-arch image (`ghcr.io/st-devpt/smoketrace`, amd64 and arm64) and a compose file. The
+  container gets `NET_RAW` and nothing else, a read-only root and no-new-privileges, and uses the host's network
+  so traceroutes start at your real gateway. The first start writes an example `data/targets.ini`.
+- **Remote agents**: the same image, started with `SERVER` and `TOKEN`, probes the server's targets from another
+  site and pushes every round; while the server is unreachable it keeps up to a day of rounds. The server lists
+  its agents in `AGENTS` (`name=token`), checks every pushed round field by field, and keeps each source apart.
+- **Seen from**: the dashboard switches between the server's own probe and each agent, and the overview shows
+  how every source sees every target, so "down for everyone" and "down from one site" look different.
+- **English and Portuguese**: the dashboard follows the browser's language, with a switch in the header;
+  messages, files and the demo are in English.
+- Every option can be set with an environment variable (`TARGETS`, `DB`, `BIND`, `PORT`, `NAME`, `AGENTS`,
+  `SERVER`, `TOKEN`, `DEMO`).
+- Databases from 0.1.0 are upgraded on start: their data becomes the server's own source (`NAME`).
+
 ## [0.1.0] - 2026-10-19
 
 First release.

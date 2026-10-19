@@ -41,6 +41,8 @@ jobs:
           get = lambda p: json.load(urllib.request.urlopen("http://127.0.0.1:8099" + p))
           ov = {t["name"]: t for t in get("/api/overview")["targets"]}
           assert len(ov) == 6 and ov["VPS Frankfurt"]["status"] == "down", ov
+          assert ov["VPS Frankfurt"]["by_source"] == {"local": "down", "porto": "down"}, ov
+          assert get(f"/api/overview?src=porto")["source"] == "porto"
           cf = ov["Cloudflare DNS"]["id"]
           d = get(f"/api/target?id={cf}&range=86400")
           assert len(d["points"]) >= 280, len(d["points"])
@@ -68,19 +70,93 @@ jobs:
           import json, os, tempfile, time
           import smoketrace as st
           db = os.path.join(tempfile.mkdtemp(), "t.db")
-          st.init_db(db)
+          st.init_db(db, "ci")
           lo = {"id": "lo", "group": "LAN", "name": "lo", "host": "127.0.0.1"}
-          st.run_round(db, [lo], int(time.time()) // st.STEP * st.STEP, st.fping, st.mtr)
+          ts = int(time.time()) // st.STEP * st.STEP
+          st.store(db, *st.round_rows("ci", ts, *st.probe_round([lo], ts, st.fping, st.mtr)), ts)
           with st.db_open(db) as c:
-              s = st.summary(c, lo, int(time.time()))
-              tr = st.trace_detail(c, "lo", None, "route")
+              s = st.summary(c, "ci", lo, int(time.time()))
+              tr = st.trace_detail(c, "ci", "lo", None, "route")
           print(json.dumps({k: s[k] for k in ("status", "median", "loss", "jitter")}), tr["cur"]["hops"])
           assert s["status"] == "ok" and s["loss"] == 0 and s["median"] is not None, s
           assert tr["cur"]["hops"][-1]["ip"] == "127.0.0.1" and tr["cur"]["hops"][-1]["loss"] == 0, tr
           EOF
 
-  release:
+  container:
+    # the image as shipped: a server and a remote agent, each with only NET_RAW, a read-only root and
+    # no-new-privileges, probing loopback for real; the agent's rounds must reach the server
     needs: [test, demo, probes]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - run: docker build -t smoketrace:test .
+      - name: Start a server and an agent
+        run: |
+          # root-owned like the one compose creates: root in the container has no CAP_DAC_OVERRIDE
+          sudo mkdir data && printf '[LAN]\nLoopback = 127.0.0.1\n' | sudo tee data/targets.ini
+          hard="--network host --read-only --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true"
+          docker run -d --name server $hard -v "$PWD/data:/data" -e NAME=ci -e AGENTS=edge=0123456789abcdef0123 smoketrace:test
+          for i in $(seq 30); do curl -fs 127.0.0.1:8099/livez && break; sleep 1; done
+          docker run -d --name agent $hard -e SERVER=http://127.0.0.1:8099 -e TOKEN=0123456789abcdef0123 smoketrace:test
+      - name: Both sources see loopback
+        run: |
+          for i in $(seq 90); do
+            curl -fs "127.0.0.1:8099/api/overview?src=edge" > ov.json && python3 - <<'EOF' && exit 0
+          import json, sys
+          ov = json.load(open("ov.json"))
+          t = ov["targets"][0]
+          sys.exit(0 if t["by_source"] == {"ci": "ok", "edge": "ok"} and t["median"] is not None else 1)
+          EOF
+            sleep 2
+          done
+          cat ov.json; exit 1
+      - name: Docker reports the server healthy
+        run: |
+          for i in $(seq 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' server)" = healthy ] && exit 0; sleep 2; done
+          docker inspect -f '{{json .State.Health}}' server; exit 1
+      - if: always()
+        run: docker logs server; docker logs agent
+
+  image:
+    needs: [container]
+    # images are only published from main (latest) and version tags
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # a software bill of materials and build provenance travel with the image
+          sbom: true
+          provenance: mode=max
+
+  release:
+    needs: [image]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
