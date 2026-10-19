@@ -505,10 +505,16 @@ def summarize(rtts):
     return med, loss, jit, sorted(seq)
 
 
+def trace_workers(n_targets):
+    """mtr runs at least MTR_CYCLES seconds (one cycle a second, more for silent hops): enough of them in
+    parallel that every target's trace fits in two thirds of the step, from 8 up to 64 at once."""
+    return min(64, max(8, math.ceil(n_targets * (MTR_CYCLES + 5) / (STEP * 2 / 3))))
+
+
 def probe_round(targets, ts, ping_fn, trace_fn):
     """Latency and traceroutes go out together, so both describe the same minutes.
     -> ({target id: rtts} or None when the latency probe itself failed, {target id: hops})"""
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=trace_workers(len(targets))) as pool:
         futs = {t["id"]: pool.submit(trace_fn, t, ts) for t in targets}
         try:
             pings = ping_fn(targets, ts) if targets else {}

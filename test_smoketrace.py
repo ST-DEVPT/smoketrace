@@ -1,6 +1,7 @@
 """Self-checks for smoketrace (loopback only, no internet). Run: python test_smoketrace.py  (or pytest)."""
 import argparse
 import json
+import math
 import os
 import socket
 import struct
@@ -62,6 +63,14 @@ def test_fping_timeout():
     assert st.fping_timeout(5) == st.PINGS * 3 + 30                  # few hosts: the old floor
     assert st.fping_timeout(640) > 640 * st.PINGS * 0.010             # many hosts: room for every packet at -i10
     assert st.fping_timeout(100000) <= st.STEP - 10                   # never past the next round
+
+
+def test_trace_workers():
+    assert st.trace_workers(10) == 8                                   # few targets: the old pool
+    n = 555
+    w = st.trace_workers(n)
+    assert math.ceil(n / w) * (st.MTR_CYCLES + 5) <= st.STEP          # every trace of a round fits in the step
+    assert st.trace_workers(100000) == 64                              # capped
 
 
 def test_parse_fping():

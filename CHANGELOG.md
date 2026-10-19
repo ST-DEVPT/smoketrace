@@ -2,6 +2,12 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [Unreleased]
+
+- **Traceroutes for many targets**: the number of mtr running at once grows with the targets (8 up to 64) so
+  every trace of a round fits in the step; with 8, 555 targets took about 15 minutes a round and nothing was
+  stored until it ended.
+
 ## [0.4.1] - 2026-10-19
 
 - **Many targets**: fping's timeout grows with the number of ICMP targets (at `-i10` every packet waits 10 ms,
