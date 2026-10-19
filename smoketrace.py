@@ -381,10 +381,16 @@ def parse_fping(text):
     return out
 
 
+def fping_timeout(n_hosts):
+    """-i10 spaces every packet 10 ms apart across all hosts, so a round needs at least hosts*pings*10ms."""
+    return min(max(PINGS * 3 + 30, n_hosts * PINGS * 0.015 + 30), max(STEP - 10, PINGS * 3 + 30))
+
+
 def fping(hosts):
     # Same flags as SmokePing's FPing probe; one fping call covers every ICMP target.
-    r = subprocess.run(["fping", "-C", str(PINGS), "-q", "-B1", "-r1", "-i10", *sorted(set(hosts))],
-                       capture_output=True, text=True, timeout=PINGS * 3 + 30)
+    hosts = sorted(set(hosts))
+    r = subprocess.run(["fping", "-C", str(PINGS), "-q", "-B1", "-r1", "-i10", *hosts],
+                       capture_output=True, text=True, timeout=fping_timeout(len(hosts)))
     return parse_fping(r.stderr)   # exit code 1/2 just means some host was unreachable
 
 

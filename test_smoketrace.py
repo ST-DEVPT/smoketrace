@@ -58,6 +58,12 @@ def expect_http(code, fn):
 
 # ---------- parsing ----------
 
+def test_fping_timeout():
+    assert st.fping_timeout(5) == st.PINGS * 3 + 30                  # few hosts: the old floor
+    assert st.fping_timeout(640) > 640 * st.PINGS * 0.010             # many hosts: room for every packet at -i10
+    assert st.fping_timeout(100000) <= st.STEP - 10                   # never past the next round
+
+
 def test_parse_fping():
     out = st.parse_fping("1.1.1.1 : 12.10 - 11.90\n"
                          "ICMP Host Unreachable from 10.0.0.1 for ICMP Echo sent to 10.0.0.9\n"

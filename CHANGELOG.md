@@ -2,6 +2,12 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [Unreleased]
+
+- **Many targets**: fping's timeout grows with the number of ICMP targets (at `-i10` every packet waits 10 ms,
+  so 640 hosts at 20 pings need over two minutes) and stays below the step; before, any config past ~300 hosts
+  hit a fixed 90 s timeout and every round came back as 100% loss.
+
 ## [0.4.0] - 2026-10-19
 
 - **Alerts** on Discord, ntfy or any webhook, when a target's status or its route changes and holds for two
