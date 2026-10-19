@@ -1,0 +1,787 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>smoketrace</title>
+<link rel="icon" id="fav" href="data:,">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f1f0ec; --hover: rgba(11,11,11,.035);
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10);
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b; --warning-edge: #a87400;
+  --route-1: #2a78d6; --route-2: #eb6834; --route-3: #1baf7a; --route-x: #898781;
+  --smoke: 82,81,78; --focus: #2a78d6;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #222220; --hover: rgba(255,255,255,.035);
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --warning-edge: transparent;
+    --route-1: #3987e5; --route-2: #d95926; --route-3: #199e70;
+    --smoke: 195,194,183; --focus: #3987e5;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: inherit; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.muted { color: var(--ink-2); }
+
+/* header */
+.top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 10px 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.brand { font-size: 15px; font-weight: 650; letter-spacing: -.01em; text-decoration: none; display: flex; align-items: center; gap: 8px; }
+.brand span span { color: var(--ink-2); font-weight: 450; }
+.brand svg { width: 18px; height: 18px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--border);
+  border-radius: 999px; background: transparent; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.chip b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.chip:hover { background: var(--hover); }
+.chip[data-zero] { opacity: .5; }
+.chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); opacity: 1; }
+.chip[aria-pressed="true"] b { color: var(--surface); }
+.search { margin-left: auto; }
+.search input { height: 30px; width: 240px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--page); color: var(--ink); font: inherit; }
+.updated { color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 12ch; text-align: right; }
+.banner { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 16px; font-size: 13px;
+  background: color-mix(in srgb, var(--critical) 13%, var(--surface)); border-bottom: 1px solid var(--border); }
+.banner[hidden] { display: none; }
+.btn { height: 28px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; }
+.btn:hover { background: var(--hover); }
+.link { border: 0; background: none; padding: 0; color: var(--ink); text-decoration: underline; cursor: pointer; }
+main { max-width: 1320px; margin: 0 auto; padding: 20px 24px 48px; transition: opacity .2s; }
+main.dim { opacity: .55; }
+
+/* status */
+.ic { width: 12px; height: 12px; flex: none; fill: currentColor; }
+.ic-ok { color: var(--good); }
+.ic-warn { color: var(--warning); stroke: var(--warning-edge); stroke-width: .9; }
+.ic-crit { color: var(--serious); }
+.ic-down { color: var(--critical); }
+.ic-stale { color: var(--muted); }
+.st { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; white-space: nowrap; }
+
+/* tables */
+.tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 0 12px; height: 42px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+tbody:last-child tr:last-child td { border-bottom: 0; }
+thead th { height: 34px; font-size: 11px; font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; }
+th.num { text-align: right; }
+tr.grp th { height: 30px; background: var(--surface-2); font-size: 12px; font-weight: 600; color: var(--ink-2); }
+tr.grp span { font-weight: 400; margin-left: 4px; }
+tr.row { cursor: pointer; }
+tr.row:hover td { background: var(--hover); }
+tr.row td:first-child { box-shadow: inset 3px 0 0 var(--edge, transparent); }
+tr.s-warn { --edge: var(--warning); }
+tr.s-crit { --edge: var(--serious); }
+tr.s-down { --edge: var(--critical); }
+tr.s-stale td { color: var(--ink-2); }
+td.name { line-height: 1.25; }
+td.name a { font-weight: 550; text-decoration: none; }
+td.name a:hover { text-decoration: underline; }
+td.name .mono { display: block; color: var(--ink-2); font-size: 11.5px; }
+td small { display: block; font-size: 11px; color: var(--ink-2); line-height: 1.2; }
+.lossy { font-weight: 650; }
+.delta { font-size: 11px; color: var(--ink-2); margin-left: 6px; }
+.chg { display: inline-flex; align-items: center; gap: 5px; font-weight: 550; }
+.spark { display: block; }
+
+/* detail */
+.crumbs { font-size: 12px; }
+.crumbs a { color: var(--ink-2); text-decoration: none; }
+.crumbs a:hover { color: var(--ink); text-decoration: underline; }
+.dhead { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 10px 0 16px; flex-wrap: wrap; }
+.eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-2); }
+h1 { font-size: 22px; font-weight: 650; letter-spacing: -.015em; margin: 2px 0 1px; }
+h2 { font-size: 14px; font-weight: 650; margin: 0; }
+.dhead .st { font-size: 14px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }
+.dhead .st .ic { width: 14px; height: 14px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+.kpi .k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); }
+.kpi .v { display: flex; align-items: center; gap: 8px; font-size: 22px; font-weight: 650; margin-top: 4px; letter-spacing: -.01em; }
+.kpi .v small { font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.kpi .s { font-size: 12px; color: var(--ink-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toolbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+.seg { display: inline-flex; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.seg button { height: 28px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2);
+  cursor: pointer; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.seg button:hover { color: var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.seg.sm button { height: 24px; padding: 0 10px; font-size: 12px; }
+.hint { font-size: 12px; color: var(--ink-2); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+.card-h { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
+.legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.lg-line { width: 16px; height: 2px; background: var(--ink); border-radius: 1px; }
+.lg-smoke { width: 12px; height: 12px; border-radius: 2px;
+  background: linear-gradient(rgba(var(--smoke),.12), rgba(var(--smoke),.55) 50%, rgba(var(--smoke),.12)); }
+.lg-sq { width: 8px; height: 12px; border-radius: 2px 2px 0 0; background: var(--c); }
+.chart-wrap { position: relative; }
+#chart { display: block; width: 100%; cursor: crosshair; border-radius: 4px; }
+.tip { position: absolute; top: 0; z-index: 3; pointer-events: none; min-width: 190px; padding: 8px 10px; font-size: 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.14); }
+.tip b { font-weight: 650; }
+.tip dl { display: grid; grid-template-columns: auto auto; gap: 2px 16px; margin: 6px 0 0; }
+.tip dt { color: var(--ink-2); }
+.tip dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 550; }
+.tip .tip-f { margin-top: 6px; color: var(--ink-2); font-size: 11px; }
+.rb { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 5px; font-size: 11px;
+  font-weight: 700; color: var(--ink); background: color-mix(in srgb, var(--c) 26%, transparent); box-shadow: inset 0 -2px 0 var(--c); }
+
+/* trace */
+.tmeta { display: flex; gap: 8px 28px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.tmeta > div { display: flex; align-items: center; gap: 8px; }
+.tmeta .k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); }
+.tsum { margin-left: auto; font-weight: 550; }
+.note.note-bad { display: flex; align-items: center; gap: 8px; color: var(--ink); background: color-mix(in srgb, var(--critical) 10%, transparent); }
+.note { margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: var(--surface-2); color: var(--ink-2); font-size: 12px; }
+table.hops th, table.hops td { height: 36px; }
+table.hops tbody tr:last-child td { border-bottom: 0; }
+tr.r-changed td, tr.r-added td, tr.r-removed td { background: color-mix(in srgb, var(--ink) 4.5%, transparent); }
+tr.r-changed td:first-child, tr.r-added td:first-child, tr.r-removed td:first-child { box-shadow: inset 3px 0 0 var(--ink-2); }
+tr.r-removed .ipc { text-decoration: line-through; color: var(--ink-2); }
+.ipc.silent { color: var(--ink-2); }
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; }
+.badge.same { font-weight: 400; color: var(--ink-2); }
+.tag { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 6px; border-radius: 4px; font-size: 11px;
+  font-weight: 500; color: var(--ink-2); border: 1px solid var(--border); vertical-align: 1px; cursor: help; }
+.tag-real { color: var(--ink); border-color: color-mix(in srgb, var(--critical) 55%, transparent);
+  background: color-mix(in srgb, var(--critical) 10%, transparent); }
+.tag .ic { width: 10px; height: 10px; }
+.barw { display: inline-block; width: 52px; margin-right: 8px; vertical-align: middle; text-align: left; }
+.bar { display: block; height: 4px; border-radius: 2px; background: var(--ink-2); opacity: .4; }
+.dl { font-weight: 650; }
+.foot { margin: 10px 0 0; font-size: 12px; color: var(--ink-2); }
+details.card > summary { cursor: pointer; font-weight: 650; font-size: 14px; }
+details.card[open] > summary { margin-bottom: 10px; }
+details .tablewrap { max-height: 420px; overflow: auto; }
+
+/* states */
+.empty { padding: 56px 16px; text-align: center; color: var(--ink-2); }
+.empty h3 { margin: 0 0 6px; font-size: 15px; color: var(--ink); }
+.empty p { margin: 0 0 14px; }
+.skel { height: 42px; border-bottom: 1px solid var(--grid);
+  background: linear-gradient(90deg, transparent 0, var(--surface-2) 40%, transparent 80%) 0 0 / 200% 100%; animation: sh 1.4s linear infinite; }
+@keyframes sh { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } main { transition: none; } }
+
+@media (max-width: 1100px) { .chip .lbl { display: none; } }
+@media (max-width: 720px) {
+  .top { padding: 10px 16px; gap: 10px; }
+  .search { margin-left: 0; flex: 1 1 100%; order: 3; }
+  .search input { width: 100%; }
+  .updated { margin-left: auto; }
+  main { padding: 16px 16px 40px; }
+  .col-spark, .col-jit, .col-age, .hint { display: none; }
+  .tsum { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M1 12c2.5 0 2.5-6 5-6s2.5 8 5 8 2.5-10 5-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>smoke<span>trace</span></span></a>
+  <nav class="chips" id="chips" aria-label="Filtrar por estado"></nav>
+  <label class="search"><span hidden>Procurar</span><input id="q" type="search" placeholder="Procurar alvo, grupo ou IP   /" autocomplete="off"></label>
+  <span class="updated" id="updated" aria-live="polite"></span>
+</header>
+<div class="banner" id="banner" role="alert" hidden>
+  <span>Sem ligação ao smoketrace. Os dados mostrados podem estar desatualizados.</span>
+  <button class="btn" data-act="retry">Tentar agora</button>
+</div>
+<main id="view"></main>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const store = {
+  get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+
+// ---------- formatting ----------
+const NB = " ";
+const ms = v => v == null ? "—" : v < 10 ? v.toFixed(2) : v < 100 ? v.toFixed(1) : String(Math.round(v));
+const msU = v => v == null ? "—" : ms(v) + NB + "ms";
+const pct = v => v == null ? "—" : (v > 0 && v < 1 ? v.toFixed(1) : Math.round(v)) + NB + "%";
+const fT = new Intl.DateTimeFormat("pt-PT", { hour: "2-digit", minute: "2-digit" });
+const fD = new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "2-digit" });
+const fDT = new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+const at = (ts, f = fDT) => f.format(new Date(ts * 1000));
+const ago = s => s < 90 ? `há ${Math.max(0, Math.round(s))} s` : s < 5400 ? `há ${Math.round(s / 60)} min`
+  : s < 129600 ? `há ${Math.round(s / 3600)} h` : `há ${Math.round(s / 86400)} d`;
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+// ---------- status: shape + label, never colour alone ----------
+const SHAPE = {
+  ok: '<circle cx="6" cy="6" r="4.6"/>',
+  warn: '<path d="M6 1.3 11.2 10.6H.8z"/>',
+  crit: '<path d="M6 .7 11.3 6 6 11.3.7 6z"/>',
+  down: '<path d="M2.4 1 6 4.6 9.6 1 11 2.4 7.4 6 11 9.6 9.6 11 6 7.4 2.4 11 1 9.6 4.6 6 1 2.4z"/>',
+  stale: '<circle cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/>',
+};
+const LABEL = { ok: "OK", warn: "Aviso", crit: "Crítico", down: "Em baixo", stale: "Sem dados" };
+const SEV = { down: 4, crit: 3, warn: 2, stale: 1, ok: 0 };
+const ORDER = ["down", "crit", "warn", "stale", "ok"];
+const icon = st => `<svg class="ic ic-${st}" viewBox="0 0 12 12" aria-hidden="true">${SHAPE[st]}</svg>`;
+const pill = st => `<span class="st">${icon(st)}${LABEL[st]}</span>`;
+const SWAP = '<svg class="ic" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 3.5h8.2L7.4 1.7l.9-.9L11.6 4 8.3 7.2l-.9-.9 1.8-1.8H1zm10 5H2.8l1.8 1.8-.9.9L.4 8l3.3-3.2.9.9-1.8 1.8H11z"/></svg>';
+
+const routeVar = i => i < 3 ? `--route-${i + 1}` : "--route-x";
+const rb = (labelTxt, i) => `<span class="rb" style="--c:var(${routeVar(i)})" title="Rota ${esc(labelTxt)}">${esc(labelTxt)}</span>`;
+
+// ---------- state ----------
+const RANGES = [[10800, "3 h"], [86400, "24 h"], [604800, "7 d"], [2592000, "30 d"]];
+const S = {
+  ov: null, ovAt: 0, offline: false, filter: null, q: "",
+  id: null, det: null, detErr: null, range: +store.get("range", 86400) || 86400,
+  sel: null, vs: "route", trace: null, hover: null, geo: null,
+};
+
+async function api(path) {
+  const r = await fetch(path, { cache: "no-store" });
+  if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; }
+  return r.json();
+}
+
+function setOffline(on) {
+  S.offline = on;
+  $("#banner").hidden = !on;
+  $("#view").classList.toggle("dim", on && !!(S.ov || S.det));
+}
+
+async function refresh() {
+  try {
+    S.ov = await api("/api/overview");
+    S.ovAt = Date.now();
+    setOffline(false);
+  } catch { setOffline(true); }
+  renderChips(); tick();
+  if (S.id) await loadDetail(); else renderOverview();
+}
+
+function tick() {
+  $("#updated").textContent = S.ovAt ? `Atualizado ${ago((Date.now() - S.ovAt) / 1000)}` : "";
+}
+
+// ---------- header ----------
+function renderChips() {
+  const n = { ok: 0, warn: 0, crit: 0, down: 0, stale: 0 };
+  for (const t of S.ov?.targets || []) n[t.status]++;
+  $("#chips").innerHTML = ORDER.map(st =>
+    `<button class="chip" data-st="${st}" aria-pressed="${S.filter === st}" ${n[st] ? "" : "data-zero"}
+      title="Mostrar só: ${LABEL[st]}" aria-label="${n[st]} ${LABEL[st]}">${icon(st)}<b>${n[st]}</b><span class="lbl">${LABEL[st]}</span></button>`).join("");
+  const bad = n.down + n.crit;
+  const worst = ORDER.find(st => n[st] && st !== "stale") || "ok";
+  const col = { down: "#d03b3b", crit: "#ec835a", warn: "#fab219", ok: "#0ca30c" }[worst];
+  $("#fav").href = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="${col}"/></svg>`)}`;
+  document.title = (bad ? `(${bad}) ` : "") + (S.det ? `${S.det.target.name} · smoketrace` : "smoketrace");
+}
+
+// ---------- overview ----------
+function empty(title, body) { return `<div class="empty"><h3>${title}</h3><p>${body}</p></div>`; }
+
+function renderOverview() {
+  const v = $("#view");
+  v.dataset.view = "ov";
+  if (!S.ov) {
+    v.innerHTML = S.offline ? empty("Sem ligação ao smoketrace", "Confirma que o serviço está a correr.")
+      : `<div class="tablewrap" aria-busy="true">${'<div class="skel"></div>'.repeat(6)}</div>`;
+    return;
+  }
+  const all = S.ov.targets;
+  if (!all.length) { v.innerHTML = empty("Sem alvos configurados", "Adiciona alvos ao <code>targets.ini</code> e reinicia o serviço."); return; }
+  const q = S.q.trim().toLowerCase();
+  const rows = all.filter(t => (!S.filter || t.status === S.filter) && (!q || `${t.name} ${t.host} ${t.group}`.toLowerCase().includes(q)));
+  if (!rows.length) {
+    v.innerHTML = empty("Nenhum alvo corresponde ao filtro", '<button class="btn" data-act="clear">Limpar filtros</button>');
+    return;
+  }
+  const groups = new Map();
+  for (const t of rows) { if (!groups.has(t.group)) groups.set(t.group, []); groups.get(t.group).push(t); }
+  let h = `<div class="tablewrap"><table class="targets"><thead><tr>
+    <th scope="col">Estado</th><th scope="col">Alvo</th><th scope="col" class="num">Mediana</th>
+    <th scope="col" class="num col-jit">Jitter</th><th scope="col" class="num">Perda</th>
+    <th scope="col" class="col-spark">Mediana · 24 h</th><th scope="col">Rota · 24 h</th><th scope="col" class="num col-age">Ronda</th>
+  </tr></thead>`;
+  for (const [g, ts] of groups) {
+    ts.sort((a, b) => SEV[b.status] - SEV[a.status] || a.name.localeCompare(b.name, "pt"));
+    h += `<tbody><tr class="grp"><th colspan="8" scope="rowgroup">${esc(g)}<span>${ts.length}</span></th></tr>${ts.map(rowHtml).join("")}</tbody>`;
+  }
+  v.innerHTML = h + "</table></div>";
+}
+
+function rowHtml(t) {
+  const now = S.ov.now;
+  const d = t.median != null && t.baseline ? t.median - t.baseline : 0;
+  const delta = d >= Math.max(2, t.baseline * 0.2) ? `<span class="delta" title="Acima da mediana das últimas 24 h (${msU(t.baseline)})">▲${NB}+${ms(d)}</span>` : "";
+  const route = t.route_changes
+    ? `<span class="chg">${SWAP}${plural(t.route_changes, "mudança", "mudanças")}</span><small>última ${ago(now - t.last_change)}</small>`
+    : `<span class="muted">estável</span>`;
+  return `<tr class="row s-${t.status}" data-id="${esc(t.id)}">
+    <td>${pill(t.status)}</td>
+    <td class="name"><a href="#/t/${esc(t.id)}">${esc(t.name)}</a><span class="mono">${esc(t.host)}</span></td>
+    <td class="num">${msU(t.median)}${delta}</td>
+    <td class="num col-jit">${msU(t.jitter)}</td>
+    <td class="num${t.loss > 0 ? " lossy" : ""}">${pct(t.loss)}</td>
+    <td class="col-spark">${spark(t, now)}</td>
+    <td>${route}</td>
+    <td class="num col-age">${t.last_ts ? ago(now - t.last_ts) : "—"}</td>
+  </tr>`;
+}
+
+function spark(t, now) {
+  const W = 156, H = 30, pts = t.spark;
+  const meds = pts.map(p => p[1]).filter(v => v != null);
+  if (!pts.length) return '<span class="muted">—</span>';
+  const ymax = Math.max(...meds, 0.1) * 1.15, from = now - 86400;
+  const X = ts => ((ts - from) / 86400 * W).toFixed(1), Y = v => (H - 6 - v / ymax * (H - 8)).toFixed(1);
+  let d = "", pen = false, loss = "", maxLoss = 0;
+  for (const [ts, m, l] of pts) {
+    if (m == null) pen = false; else { d += `${pen ? "L" : "M"}${X(ts)} ${Y(m)}`; pen = true; }
+    if (l > 0) {
+      maxLoss = Math.max(maxLoss, l);
+      loss += `<rect x="${X(ts)}" y="${H - 1 - (1 + l / 100 * 5)}" width="1.6" height="${1 + l / 100 * 5}" fill="var(${l >= 20 ? "--critical" : "--warning"})"/>`;
+    }
+  }
+  const lbl = meds.length ? `Mediana nas últimas 24 h entre ${msU(Math.min(...meds))} e ${msU(Math.max(...meds))}; perda máxima ${pct(maxLoss)}` : "Sem respostas nas últimas 24 h";
+  return `<svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${lbl}"><title>${lbl}</title>
+    <path d="${d}" fill="none" stroke="var(--ink-2)" stroke-width="1.4" stroke-linejoin="round"/>${loss}</svg>`;
+}
+
+// ---------- detail ----------
+async function openTarget(id) {
+  if (S.id !== id) Object.assign(S, { id, det: null, detErr: null, trace: null, sel: null, hover: null });
+  renderDetail();
+  await loadDetail();
+}
+
+async function loadDetail() {
+  const id = S.id;
+  try {
+    const d = await api(`/api/target?id=${encodeURIComponent(id)}&range=${S.range}`);
+    if (S.id !== id) return;
+    S.det = d; S.detErr = null;
+  } catch (e) {
+    if (S.id !== id) return;
+    S.detErr = e.status === 404 ? "notfound" : "offline";
+    if (S.detErr === "offline") setOffline(true);
+  }
+  renderDetail();
+  if (S.det && (S.sel == null || !S.trace)) loadTrace();   // following "latest": refresh the trace too
+}
+
+async function loadTrace() {
+  const id = S.id;
+  try {
+    const tr = await api(`/api/trace?id=${encodeURIComponent(id)}&vs=${S.vs}${S.sel ? `&ts=${S.sel}` : ""}`);
+    if (S.id === id) S.trace = tr;
+  } catch { if (S.id === id) S.trace = { error: true }; }
+  renderTrace(); drawChart();
+}
+
+function renderDetail() {
+  const v = $("#view");
+  if (S.detErr === "notfound") {
+    v.dataset.view = "nf";
+    v.innerHTML = empty("Alvo não encontrado", 'Pode ter sido removido do <code>targets.ini</code>. <a href="#/">Ver todos os alvos</a>');
+    return;
+  }
+  if (v.dataset.view !== "t:" + S.id) {
+    v.dataset.view = "t:" + S.id;
+    v.innerHTML = `
+      <nav class="crumbs"><a href="#/">← Todos os alvos</a></nav>
+      <section class="dhead" id="dhead"></section>
+      <section class="kpis" id="kpis"></section>
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="Intervalo de tempo">${RANGES.map(([s, l]) => `<button data-range="${s}">${l}</button>`).join("")}</div>
+        <span class="hint">Clica no gráfico (ou ← → e Enter) para abrir o traceroute desse momento.</span>
+      </div>
+      <section class="card">
+        <div class="card-h"><h2>Latência, perda e rota</h2><div class="legend" id="legend"></div></div>
+        <div class="chart-wrap"><canvas id="chart" tabindex="0" role="img" aria-label="Gráfico de latência"></canvas><div class="tip" id="tip" hidden></div></div>
+      </section>
+      <section class="card" id="trace" aria-live="polite"></section>
+      <details class="card" id="rawd"><summary>Dados em tabela</summary><div id="raw"></div></details>`;
+  }
+  for (const b of v.querySelectorAll("[data-range]")) b.setAttribute("aria-pressed", +b.dataset.range === S.range);
+  const d = S.det;
+  if (!d) {
+    $("#dhead").innerHTML = `<div><div class="eyebrow">&nbsp;</div><h1>A carregar…</h1></div>`;
+    $("#kpis").innerHTML = "";
+    renderTrace(); drawChart();
+    return;
+  }
+  const t = d.target, segs = d.segments, cur = segs[segs.length - 1];
+  const changes = segs.filter(s => s.change).length;
+  $("#dhead").innerHTML = `<div><div class="eyebrow">${esc(t.group)}</div><h1>${esc(t.name)}</h1><div class="mono muted">${esc(t.host)}</div></div>${pill(t.status)}`;
+  const rangeLbl = RANGES.find(r => r[0] === S.range)?.[1] || "";
+  const kpi = (k, v, s) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  $("#kpis").innerHTML =
+    kpi("Mediana", msU(t.median), t.baseline ? `base 24 h: ${msU(t.baseline)}` : "sem base ainda") +
+    kpi("Jitter", msU(t.jitter), "média |Δ| entre respostas") +
+    kpi("Perda", pct(t.loss), `última ronda · ${d.pings} pings`) +
+    kpi("Rota atual", cur ? `${rb(cur.label, cur.route)}<small>${plural(cur.hops, "salto", "saltos")}</small>` : "—",
+      cur ? `desde ${at(cur.from)}` : "ainda sem traceroute") +
+    kpi(`Mudanças · ${rangeLbl}`, String(changes), changes ? `última ${at(segs.filter(s => s.change).pop().from)}` : "rota estável");
+  const routes = [...new Map(segs.map(s => [s.route, s])).values()].sort((a, b) => a.route - b.route);
+  $("#legend").innerHTML = `<span><i class="lg-line"></i>Mediana</span>
+    <span><i class="lg-smoke"></i>Dispersão dos ${d.pings} pings</span>
+    <span><i class="lg-sq" style="--c:var(--warning)"></i>Perda &lt; ${d.loss_crit}${NB}%</span>
+    <span><i class="lg-sq" style="--c:var(--critical)"></i>≥ ${d.loss_crit}${NB}%</span>
+    ${routes.length ? `<span>Rotas ${routes.map(s => rb(s.label, s.route)).join(" ")}</span>` : ""}`;
+  renderChips(); drawChart(); renderTrace();
+  if ($("#rawd").open) renderRaw();
+}
+
+// ---------- chart (canvas) ----------
+const L = { l: 54, r: 14, t: 12, ph: 220, g1: 14, lh: 34, g2: 10, rh: 22, ax: 24 };
+
+function niceTicks(max) {
+  const raw = max / 4, p = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw);
+  const out = [];
+  for (let v = 0; v < max + step * 0.999; v += step) out.push(+v.toFixed(6));
+  return out;
+}
+const fmtTick = v => v >= 10 ? String(Math.round(v)) : String(+v.toFixed(2));
+
+function segAt(ts) {
+  const segs = S.det?.segments || [];
+  for (let i = segs.length - 1; i >= 0; i--) if (segs[i].from <= ts) return segs[i];
+  return null;
+}
+
+function drawChart() {
+  const cv = $("#chart"), d = S.det;
+  if (!cv) return;
+  const W = cv.parentElement.clientWidth, H = L.t + L.ph + L.g1 + L.lh + L.g2 + L.rh + L.ax;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.height = H + "px";
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const C = Object.fromEntries(["--ink", "--ink-2", "--muted", "--grid", "--axis", "--surface", "--smoke", "--warning", "--critical"].map(n => [n, cssv(n)]));
+  const FONT = "11px system-ui, -apple-system, 'Segoe UI', sans-serif";
+  g.font = FONT; g.textBaseline = "middle";
+  const x0 = L.l, x1 = W - L.r, pw = x1 - x0;
+  const yTop = L.t, yBot = L.t + L.ph, ly0 = yBot + L.g1, ly1 = ly0 + L.lh, ry0 = ly1 + L.g2, ry1 = ry0 + L.rh;
+  const line = (a, b, c, e) => { g.beginPath(); g.moveTo(a, b); g.lineTo(c, e); g.stroke(); };
+  if (!d || !d.points.length) {
+    g.fillStyle = C["--ink-2"]; g.textAlign = "center"; g.font = "13px system-ui, sans-serif";
+    g.fillText(d ? "À espera da primeira ronda — os dados aparecem em ≤ 5 min." : "A carregar…", W / 2, H / 2);
+    S.geo = null; cv.setAttribute("aria-label", "Sem dados"); return;
+  }
+  const { from, to, points: pts } = d;
+  const X = ts => x0 + (ts - from) / (to - from) * pw;
+  const bw = Math.max(1, d.bucket / (to - from) * pw);
+  const tops = pts.map(p => p[4].length ? p[4][p[4].length - 1] : p[1]).filter(v => v != null).sort((a, b) => a - b);
+  const meds = pts.map(p => p[1]).filter(v => v != null);
+  const p95 = tops.length ? tops[Math.floor((tops.length - 1) * 0.95)] : 1;   // one spike must not flatten the rest
+  const ticks = niceTicks(Math.max(p95 * 1.1, Math.max(0, ...meds) * 1.12, 1));
+  const ymax = ticks[ticks.length - 1];
+  const Y = v => yBot - Math.min(v, ymax) / ymax * L.ph;
+
+  // grid + y axis
+  g.textAlign = "right"; g.lineWidth = 1;
+  for (const tv of ticks) {
+    const y = Math.round(Y(tv)) + 0.5;
+    g.strokeStyle = tv === 0 ? C["--axis"] : C["--grid"]; line(x0, y, x1, y);
+    g.fillStyle = C["--muted"]; g.fillText(tv === ymax ? `${fmtTick(tv)} ms` : fmtTick(tv), x0 - 8, y);
+  }
+  g.fillStyle = C["--muted"];
+  g.fillText("perda", x0 - 8, ly0 + L.lh / 2); g.fillText("rota", x0 - 8, ry0 + L.rh / 2);
+  g.strokeStyle = C["--grid"]; line(x0, ly0 + 0.5, x1, ly0 + 0.5);
+  g.strokeStyle = C["--axis"]; line(x0, ly1 + 0.5, x1, ly1 + 0.5);
+
+  // smoke: nested min..max bands of the sorted pings, darker towards the median (SmokePing style)
+  g.fillStyle = `rgba(${C["--smoke"]},.11)`;
+  for (const p of pts) {
+    const s = p[4], n = s.length, x = X(p[0]);
+    for (let k = 0; k < n >> 1; k++) { const yh = Y(s[n - 1 - k]); g.fillRect(x, yh, bw, Math.max(1, Y(s[k]) - yh)); }
+  }
+
+  // route-change rules, in the colour of the new route, across all three bands
+  g.lineWidth = 1.5;
+  for (const s of d.segments) if (s.change) { const x = Math.round(X(s.from)) + 0.5; g.strokeStyle = cssv(routeVar(s.route)); line(x, yTop, x, ry1); }
+
+  // median
+  g.strokeStyle = C["--ink"]; g.lineWidth = 1.75; g.lineJoin = "round"; g.beginPath();
+  let pen = false, last = null;
+  for (const p of pts) {
+    if (p[1] == null || (last != null && p[0] - last > d.bucket * 1.5)) pen = false;
+    if (p[1] == null) continue;
+    const x = X(p[0]) + bw / 2, y = Y(p[1]);
+    pen ? g.lineTo(x, y) : g.moveTo(x, y); pen = true; last = p[0];
+  }
+  g.stroke();
+
+  // loss strip: height = loss, colour = severity
+  for (const p of pts) if (p[2] > 0) {
+    const h = Math.max(2, p[2] / 100 * L.lh);
+    g.fillStyle = p[2] >= d.loss_crit ? C["--critical"] : C["--warning"];
+    g.fillRect(X(p[0]), ly1 - h, Math.max(1, bw > 3 ? bw - 1 : bw), h);
+  }
+
+  // route strip: tinted segment + solid top edge + letter (identity never by colour alone)
+  g.textAlign = "center";
+  for (const s of d.segments) {
+    const a = Math.max(X(s.from), x0), b = Math.min(X(s.end), x1), w = b - a - (b < x1 ? 2 : 0);
+    if (w <= 0) continue;
+    const col = cssv(routeVar(s.route));
+    g.fillStyle = col; g.globalAlpha = 0.24; g.fillRect(a, ry0, w, L.rh); g.globalAlpha = 1; g.fillRect(a, ry0, w, 2);
+    if (w >= 16) { g.fillStyle = C["--ink"]; g.font = "600 11px system-ui, sans-serif"; g.fillText(s.label, a + w / 2, ry0 + L.rh / 2 + 1); g.font = FONT; }
+  }
+
+  // x axis, local-time aligned
+  const span = to - from, steps = [300, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800];
+  const step = steps.find(s => span / s <= pw / 84) || 604800;
+  const off = new Date().getTimezoneOffset() * 60;
+  g.fillStyle = C["--muted"]; g.strokeStyle = C["--axis"]; g.lineWidth = 1;
+  for (let t = Math.ceil((from - off) / step) * step + off; t <= to; t += step) {
+    const x = Math.round(X(t)) + 0.5, dt = new Date(t * 1000);
+    line(x, ry1 + 2, x, ry1 + 6);
+    const midnight = dt.getHours() === 0 && dt.getMinutes() === 0;
+    g.fillText(step >= 86400 || midnight ? fD.format(dt) : fT.format(dt), x, ry1 + 15);
+  }
+
+  // selected trace + hover crosshair
+  const sel = S.trace?.cur?.ts;
+  if (sel != null && sel >= from) {
+    const x = Math.round(X(sel) + bw / 2) + 0.5;
+    g.strokeStyle = C["--ink"]; g.lineWidth = 1.5; line(x, yTop, x, ly1);   // stops above the route letters
+    g.fillStyle = C["--ink"]; g.beginPath(); g.moveTo(x - 5, yTop - 6); g.lineTo(x + 5, yTop - 6); g.lineTo(x, yTop); g.fill();
+  }
+  const hp = S.hover != null ? pts[S.hover] : null;
+  if (hp) {
+    const x = Math.round(X(hp[0]) + bw / 2) + 0.5;
+    g.strokeStyle = C["--muted"]; g.lineWidth = 1; line(x, yTop, x, ly1);
+    if (hp[1] != null) {
+      g.beginPath(); g.arc(x, Y(hp[1]), 4, 0, 2 * Math.PI);
+      g.fillStyle = C["--ink"]; g.fill(); g.lineWidth = 2; g.strokeStyle = C["--surface"]; g.stroke();
+    }
+  }
+  S.geo = { x0, x1, X, bw, W };
+  cv.setAttribute("aria-label", `Latência de ${d.target.name}: mediana entre ${msU(Math.min(...meds))} e ${msU(Math.max(...meds))}, ${plural(d.segments.filter(s => s.change).length, "mudança", "mudanças")} de rota. Tabela de dados disponível abaixo.`);
+}
+
+function nearest(x) {
+  const pts = S.det.points, gm = S.geo;
+  let lo = 0, hi = pts.length - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; gm.X(pts[m][0]) + gm.bw / 2 < x ? lo = m + 1 : hi = m; }
+  if (lo > 0 && Math.abs(gm.X(pts[lo - 1][0]) - x) < Math.abs(gm.X(pts[lo][0]) - x)) lo--;
+  return lo;
+}
+
+function showTip(i) {
+  const tip = $("#tip"), p = S.det?.points[i];
+  if (!p || !S.geo) { tip.hidden = true; return; }
+  const seg = segAt(p[0]), s = p[4];
+  const bucketed = S.det.bucket > 300;
+  tip.innerHTML = `<b>${at(p[0])}</b>${bucketed ? ` <span class="muted">· ${Math.round(S.det.bucket / 60)} min</span>` : ""}
+    <dl><dt>Mediana</dt><dd>${msU(p[1])}</dd>
+    <dt>Mín – máx</dt><dd>${s.length ? `${ms(s[0])} – ${ms(s[s.length - 1])}${NB}ms` : "—"}</dd>
+    <dt>Perda</dt><dd>${pct(p[2])}</dd><dt>Jitter</dt><dd>${msU(p[3])}</dd>
+    <dt>Rota</dt><dd>${seg ? rb(seg.label, seg.route) : "—"}</dd></dl>
+    <div class="tip-f">Clica para ver o traceroute</div>`;
+  tip.hidden = false;
+  const x = S.geo.X(p[0]) + S.geo.bw / 2, w = tip.offsetWidth;
+  tip.style.left = `${x + 14 + w > S.geo.W ? Math.max(0, x - 14 - w) : x + 14}px`;
+  tip.style.top = `${L.t + 4}px`;
+}
+
+function setHover(i) {
+  if (S.hover === i) return;
+  S.hover = i; drawChart();
+  i == null ? ($("#tip").hidden = true) : showTip(i);
+}
+
+function selectPoint(i) {
+  const p = S.det?.points[i];
+  if (!p) return;
+  const lastTs = S.det.points[S.det.points.length - 1][0];
+  S.sel = p[0] >= lastTs ? null : p[0] + S.det.bucket - 1;   // inside a bucket: its last trace
+  loadTrace();
+}
+
+// ---------- traceroute diff ----------
+const STATE = {
+  same: ['<span class="badge same">= igual</span>'],
+  changed: [`<span class="badge">${SWAP}mudou</span>`],
+  added: ['<span class="badge">+ novo</span>'],
+  removed: ['<span class="badge">− saiu</span>'],
+  unknown: ['<span class="badge same">? sem resposta</span>'],
+};
+const RL_TIP = "A perda neste salto não continua até ao destino: o router está a limitar (rate-limit) ou a despriorizar respostas ICMP. Não é perda real.";
+const REAL_TIP = "A perda começa neste salto e mantém-se até ao destino: é aqui (ou na ligação para aqui) que o problema começa.";
+
+function ipCell(h) {
+  if (!h) return '<span class="muted">—</span>';
+  return h.ip ? `<span class="ipc mono">${esc(h.ip)}</span>` : '<span class="ipc mono silent" title="Não respondeu a ICMP (normal em muitos routers)">???</span>';
+}
+
+function lossCell(h, origin) {
+  if (!h || !h.ip) return '<span class="muted">—</span>';
+  if (h.loss <= 0) return '<span class="muted">0' + NB + "%</span>";
+  const real = origin != null && h.ttl >= origin;
+  const tag = real ? (h.ttl === origin ? `<span class="tag tag-real" title="${REAL_TIP}">${icon("down")}perda real começa aqui</span>` : "")
+    : `<span class="tag" title="${RL_TIP}">rate-limit</span>`;
+  return `<span class="${real ? "dl" : ""}">${pct(h.loss)}</span>${tag}`;
+}
+
+function renderTrace() {
+  const el = $("#trace");
+  if (!el) return;
+  const tr = S.trace;
+  const head = `<div class="card-h"><h2>Traceroute (mtr)</h2>
+    <div class="seg sm" role="group" aria-label="Comparar com">
+      <button data-vs="route" aria-pressed="${S.vs === "route"}">vs. rota anterior</button>
+      <button data-vs="round" aria-pressed="${S.vs === "round"}">vs. ronda anterior</button></div></div>`;
+  if (!tr) { el.innerHTML = head + '<div class="empty">A carregar…</div>'; return; }
+  if (tr.error) { el.innerHTML = head + empty("Não foi possível carregar o traceroute", '<button class="btn" data-act="retrace">Tentar de novo</button>'); return; }
+  if (!tr.cur) { el.innerHTML = head + empty("Ainda sem traceroutes", "O primeiro mtr corre na próxima ronda (≤ 5 min)."); return; }
+  const { cur, prev, rows } = tr;
+  const n = st => rows.filter(r => r.state === st).length;
+  const nc = n("changed"), na = n("added"), nr = n("removed"), nu = n("unknown");
+  const lastOf = hops => [...hops].reverse().find(h => h.ip && h.avg != null);
+  const dc = lastOf(cur.hops), dp = prev && lastOf(prev.hops);
+  const dDest = dc && dp && dc.ip === dp.ip ? dc.avg - dp.avg : null;   // only when both reached the same last hop
+  const tail = cur.hops[cur.hops.length - 1];
+  const stuck = tail && !tail.ip && dc ? `O traceroute não chega ao destino: a última resposta vem do salto ${dc.ttl} (${esc(dc.ip)}).` : "";
+  const parts = [nc && plural(nc, "salto mudou", "saltos mudaram"), na && plural(na, "novo", "novos"),
+    nr && plural(nr, "saiu", "saíram"), nu && `${nu} sem resposta`].filter(Boolean);
+  const sum = !prev ? "Sem traceroute anterior."
+    : (parts.length ? parts.join(" · ") : "Mesmos saltos")
+      + (dDest != null ? ` · destino ${dDest >= 0 ? "+" : "−"}${ms(Math.abs(dDest))}${NB}ms` : "");
+  const maxAvg = Math.max(1, ...cur.hops.map(h => h.avg || 0));
+  const prevAvg = new Map((prev?.hops || []).map(h => [h.ttl, h.avg]));
+  const body = rows.map(r => {
+    const c = r.cur, p = r.prev;
+    const dv = c?.avg != null && p?.avg != null ? c.avg - p.avg : null;
+    const dTxt = dv == null ? "—" : `${dv >= 0 ? "+" : "−"}${ms(Math.abs(dv))}`;
+    return `<tr class="r-${r.state || "none"}">
+      <td class="num">${r.ttl}</td>
+      ${prev ? `<td>${ipCell(p)}${p?.avg != null ? ` <span class="muted">${msU(prevAvg.get(r.ttl))}</span>` : ""}</td>` : ""}
+      <td>${ipCell(c)}</td>
+      <td class="num">${lossCell(c, cur.origin)}</td>
+      <td class="num">${c?.avg != null ? `<span class="barw"><span class="bar" style="width:${Math.max(2, c.avg / maxAvg * 100)}%"></span></span>${msU(c.avg)}` : '<span class="muted">—</span>'}</td>
+      <td class="num">${c?.sd != null ? ms(c.sd) : "—"}</td>
+      ${prev ? `<td class="num${dv != null && Math.abs(dv) >= 10 ? " dl" : ""}">${dTxt}</td><td>${STATE[r.state]?.[0] || ""}</td>` : ""}
+    </tr>`;
+  }).join("");
+  el.innerHTML = head + `
+    <div class="tmeta">
+      <div><span class="k">Agora</span>${rb(cur.label, cur.route)}<b>${at(cur.ts)}</b>
+        ${S.sel ? '<button class="link" data-act="latest">ir para o mais recente</button>' : '<span class="muted">mais recente</span>'}</div>
+      <div><span class="k">Antes</span>${prev ? `${rb(prev.label, prev.route)}<span>${at(prev.ts)}</span>` : '<span class="muted">—</span>'}</div>
+      <div class="tsum">${sum}</div>
+    </div>
+    ${stuck ? `<p class="note note-bad">${icon("down")} ${stuck}</p>` : ""}
+    ${tr.fallback ? '<p class="note">Sem mudança de rota no histórico deste alvo — a comparar com a ronda anterior.</p>' : ""}
+    <div class="tablewrap"><table class="hops"><thead><tr>
+      <th scope="col" class="num">#</th>${prev ? '<th scope="col">Antes</th>' : ""}<th scope="col">Agora</th>
+      <th scope="col" class="num">Perda</th><th scope="col" class="num">Média</th><th scope="col" class="num">Desvio</th>
+      ${prev ? '<th scope="col" class="num">Δ média</th><th scope="col">Salto</th>' : ""}
+    </tr></thead><tbody>${body}</tbody></table></div>
+    <p class="foot">Perda só num salto intermédio = rate-limit de ICMP, não perda real. Conta a perda que começa num salto e se mantém até ao destino.</p>`;
+}
+
+function renderRaw() {
+  const d = S.det;
+  if (!d) return;
+  const rows = [...d.points].reverse().map(p => {
+    const s = p[4], seg = segAt(p[0]);
+    return `<tr><td>${at(p[0])}</td><td class="num">${msU(p[1])}</td><td class="num">${s.length ? msU(s[0]) : "—"}</td>
+      <td class="num">${s.length ? msU(s[s.length - 1]) : "—"}</td><td class="num">${pct(p[2])}</td><td class="num">${msU(p[3])}</td>
+      <td>${seg ? esc(seg.label) : "—"}</td></tr>`;
+  }).join("");
+  $("#raw").innerHTML = `<div class="tablewrap"><table><thead><tr><th scope="col">Hora</th><th scope="col" class="num">Mediana</th>
+    <th scope="col" class="num">Mín</th><th scope="col" class="num">Máx</th><th scope="col" class="num">Perda</th>
+    <th scope="col" class="num">Jitter</th><th scope="col">Rota</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+// ---------- events ----------
+function route() {
+  const m = location.hash.match(/^#\/t\/([\w-]+)$/);
+  if (m) return openTarget(m[1]);
+  Object.assign(S, { id: null, det: null, detErr: null, trace: null, sel: null, hover: null });
+  renderChips(); renderOverview();
+}
+
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-st],[data-range],[data-vs],[data-act],tr.row");
+  if (!b) return;
+  const ds = b.dataset;
+  if (ds.st) {
+    S.filter = S.filter === ds.st ? null : ds.st;
+    renderChips();
+    if (S.id) location.hash = "#/"; else renderOverview();
+  } else if (ds.range) {
+    S.range = +ds.range; store.set("range", S.range); S.hover = null; $("#tip").hidden = true; loadDetail();
+  } else if (ds.vs) { S.vs = ds.vs; loadTrace(); }
+  else if (ds.act === "latest") { S.sel = null; loadTrace(); }
+  else if (ds.act === "retrace") loadTrace();
+  else if (ds.act === "retry") refresh();
+  else if (ds.act === "clear") { S.filter = null; S.q = ""; $("#q").value = ""; renderChips(); renderOverview(); }
+  else if (b.matches("tr.row") && !e.target.closest("a")) location.hash = "#/t/" + ds.id;
+});
+
+const view = $("#view");
+const pointAt = e => {
+  if (e.target.id !== "chart" || !S.geo || !S.det?.points.length) return undefined;
+  const x = e.clientX - e.target.getBoundingClientRect().left;
+  return x < S.geo.x0 - 4 || x > S.geo.x1 + 4 ? null : nearest(x);
+};
+view.addEventListener("pointermove", e => { const i = pointAt(e); if (i !== undefined) setHover(i); });
+view.addEventListener("pointerout", e => { if (e.target.id === "chart") setHover(null); });
+view.addEventListener("click", e => { const i = pointAt(e); if (i != null) selectPoint(i); });
+view.addEventListener("focusout", e => { if (e.target.id === "chart") setHover(null); });
+view.addEventListener("keydown", e => {
+  if (e.target.id !== "chart" || !S.det?.points.length) return;
+  const n = S.det.points.length, cur = S.hover ?? n - 1;
+  const step = e.shiftKey ? 12 : 1;
+  if (e.key === "ArrowLeft") setHover(Math.max(0, cur - step));
+  else if (e.key === "ArrowRight") setHover(Math.min(n - 1, cur + step));
+  else if (e.key === "Home") setHover(0);
+  else if (e.key === "End") setHover(n - 1);
+  else if (e.key === "Enter" || e.key === " ") selectPoint(cur);
+  else return;
+  e.preventDefault();
+});
+view.addEventListener("toggle", e => { if (e.target.id === "rawd" && e.target.open) renderRaw(); }, true);
+
+$("#q").addEventListener("input", e => {
+  S.q = e.target.value;
+  if (S.id) location.hash = "#/"; else renderOverview();
+});
+document.addEventListener("keydown", e => {
+  const typing = /INPUT|TEXTAREA/.test(document.activeElement?.tagName);
+  if (e.key === "/" && !typing) { e.preventDefault(); $("#q").focus(); }
+  else if (e.key === "Escape" && typing) { $("#q").blur(); }
+  else if (e.key === "Escape" && S.id) location.hash = "#/";
+});
+window.addEventListener("hashchange", route);
+new ResizeObserver(() => drawChart()).observe(view);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawChart(); if (S.ov && !S.id) renderOverview(); });
+
+route();
+refresh();
+setInterval(refresh, 60000);
+setInterval(tick, 5000);
+</script>
+</body>
+</html>

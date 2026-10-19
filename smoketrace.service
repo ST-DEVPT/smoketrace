@@ -1,0 +1,18 @@
+# /etc/systemd/system/smoketrace.service — code in /opt/smoketrace, data in /var/lib/smoketrace
+[Unit]
+Description=smoketrace (fping + mtr)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/smoketrace/smoketrace.py --targets /etc/smoketrace/targets.ini --db /var/lib/smoketrace/smoketrace.db --bind 0.0.0.0 --port 8099
+DynamicUser=yes
+StateDirectory=smoketrace
+# fping and mtr-packet need raw ICMP sockets; nothing else is privileged
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=yes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

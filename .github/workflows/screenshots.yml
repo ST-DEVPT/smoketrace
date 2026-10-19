@@ -1,0 +1,26 @@
+name: Screenshots
+
+# Regenerates the README's images and the social preview from the demo, from the Actions tab;
+# they come back as an artifact to commit.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
+        with:
+          python-version: "3.13"
+      - run: pip install playwright==1.63.0 && python -m playwright install --with-deps chromium
+      - run: python docs/screenshots.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: screenshots
+          path: |
+            docs/*.jpg
+            docs/social-preview.png

@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Third-party actions are pinned to a commit, not a tag that can move; Dependabot keeps them current.
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python test_smoketrace.py
+
+  demo:
+    # the whole thing end to end: start the demo, ask every endpoint, and check the page's script parses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
+        with:
+          python-version: "3.13"
+      - name: Start the demo and ask it
+        run: |
+          python smoketrace.py --demo --port 8099 &
+          for i in $(seq 30); do curl -fs 127.0.0.1:8099/api/overview > /dev/null && break; sleep 1; done
+          curl -fs 127.0.0.1:8099/ | grep -q "<title>smoketrace</title>"
+          python - <<'EOF'
+          import json, urllib.request
+          get = lambda p: json.load(urllib.request.urlopen("http://127.0.0.1:8099" + p))
+          ov = {t["name"]: t for t in get("/api/overview")["targets"]}
+          assert len(ov) == 6 and ov["VPS Frankfurt"]["status"] == "down", ov
+          cf = ov["Cloudflare DNS"]["id"]
+          d = get(f"/api/target?id={cf}&range=86400")
+          assert len(d["points"]) >= 280, len(d["points"])
+          assert [s["label"] for s in d["segments"] if s["change"]] == ["B", "A"], d["segments"]
+          tr = get(f"/api/trace?id={cf}")
+          assert (tr["cur"]["label"], tr["prev"]["label"]) == ("A", "B")
+          assert {r["state"] for r in tr["rows"]} >= {"same", "changed"}, tr["rows"]
+          print("demo ok")
+          EOF
+      - name: The page's script parses
+        run: |
+          python -c "import re; s = open('index.html', encoding='utf-8').read(); open('page.js', 'w', encoding='utf-8').write(re.search(r'<script>(.*)</script>', s, re.S).group(1))"
+          node --check page.js
+
+  probes:
+    # the real probes, not the demo: one round of fping and mtr against the runner itself
+    # (hosted runners cannot ping the internet, but loopback is enough to prove the commands and the parsing)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - run: sudo apt-get update -q && sudo apt-get install -yq fping mtr-tiny
+      - name: One real round against 127.0.0.1
+        run: |
+          sudo python3 - <<'EOF'
+          import json, os, tempfile, time
+          import smoketrace as st
+          db = os.path.join(tempfile.mkdtemp(), "t.db")
+          st.init_db(db)
+          lo = {"id": "lo", "group": "LAN", "name": "lo", "host": "127.0.0.1"}
+          st.run_round(db, [lo], int(time.time()) // st.STEP * st.STEP, st.fping, st.mtr)
+          with st.db_open(db) as c:
+              s = st.summary(c, lo, int(time.time()))
+              tr = st.trace_detail(c, "lo", None, "route")
+          print(json.dumps({k: s[k] for k in ("status", "median", "loss", "jitter")}), tr["cur"]["hops"])
+          assert s["status"] == "ok" and s["loss"] == 0 and s["median"] is not None, s
+          assert tr["cur"]["hops"][-1]["ip"] == "127.0.0.1" and tr["cur"]["hops"][-1]["loss"] == 0, tr
+          EOF
+
+  release:
+    needs: [test, demo, probes]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - name: Publish the CHANGELOG section as the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          awk -v v="${TAG#v}" '/^## /{p = index($0, "[" v "]") > 0; next} p' CHANGELOG.md > notes.md
+          # a tag without its CHANGELOG section is a release nobody can read: refuse it
+          test -s notes.md || { echo "CHANGELOG.md has no section for ${TAG#v}"; exit 1; }
+          gh release create "$TAG" --title "$TAG" --notes-file notes.md
