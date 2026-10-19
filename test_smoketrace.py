@@ -1,14 +1,62 @@
-"""Self-checks for smoketrace's pure logic (no network). Run: python test_smoketrace.py  (or pytest)."""
+"""Self-checks for smoketrace (loopback only, no internet). Run: python test_smoketrace.py  (or pytest)."""
+import argparse
 import json
+import os
+import socket
+import struct
 import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import smoketrace as st
 
+TOKEN = "0123456789abcdef"
 
-def hop(ttl, ip, loss=0.0):
-    return {"ttl": ttl, "ip": ip, "loss": loss, "avg": 10.0 if ip else None, "best": None, "wrst": None, "sd": None}
 
+def hop(ttl, ip, loss=0.0, asn=None):
+    return {"ttl": ttl, "ip": ip, "asn": asn, "loss": loss, "avg": 10.0 if ip else None, "best": None, "wrst": None,
+            "sd": None}
+
+
+def target(tid, host="10.0.0.9", **kw):
+    return st.make_target(tid, "g", tid.upper(), host, **kw)
+
+
+def args(**kw):
+    base = dict(smokeping=None, targets=Path("nowhere.ini"), agents="", name="home")
+    return argparse.Namespace(**{**base, **kw})
+
+
+def serve(handler):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+def call(url, body=None, token=TOKEN, cookie=None, form=None):
+    headers = {"Authorization": f"Bearer {token}"}
+    if cookie:
+        headers["Cookie"] = cookie
+    data = form.encode() if form else body and json.dumps(body).encode()
+    with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers), timeout=5) as r:
+        raw = r.read()
+        return json.loads(raw) if r.headers.get("Content-Type", "").startswith("application/json") else raw.decode()
+
+
+def expect_http(code, fn):
+    try:
+        fn()
+    except urllib.error.HTTPError as e:
+        assert e.code == code, (e.code, code)
+        return e
+    raise AssertionError(f"expected HTTP {code}")
+
+
+# ---------- parsing ----------
 
 def test_parse_fping():
     out = st.parse_fping("1.1.1.1 : 12.10 - 11.90\n"
@@ -25,13 +73,35 @@ def test_summarize():
     assert st.summarize([None, None]) == (None, 100.0, None, [])
 
 
-def test_parse_mtr():
+def test_parse_mtr_with_asn():
     raw = {"report": {"hubs": [
-        {"count": "1", "host": "192.168.1.1", "Loss%": 0.0, "Avg": 0.5, "Best": 0.3, "Wrst": 0.9, "StDev": 0.1},
-        {"count": 2, "host": "???", "Loss%": 100.0, "Avg": 0.0, "Best": 0.0, "Wrst": 0.0, "StDev": 0.0}]}}
-    a, b = st.parse_mtr(json.dumps(raw))
-    assert a == {"ttl": 1, "ip": "192.168.1.1", "loss": 0.0, "avg": 0.5, "best": 0.3, "wrst": 0.9, "sd": 0.1}
-    assert b["ttl"] == 2 and b["ip"] is None and b["avg"] is None
+        {"count": "1", "host": "192.168.1.1", "ASN": "AS???", "Loss%": 0.0, "Avg": 0.5, "Best": 0.3, "Wrst": 0.9,
+         "StDev": 0.1},
+        {"count": 2, "host": "1.1.1.1", "ASN": "AS13335", "Loss%": 0.0, "Avg": 9.5, "Best": 9.1, "Wrst": 10.2,
+         "StDev": 0.2},
+        {"count": 3, "host": "???", "Loss%": 100.0, "Avg": 0.0, "Best": 0.0, "Wrst": 0.0, "StDev": 0.0}]}}
+    a, b, c = st.parse_mtr(json.dumps(raw))
+    assert a == {"ttl": 1, "ip": "192.168.1.1", "asn": None, "loss": 0.0, "avg": 0.5, "best": 0.3, "wrst": 0.9, "sd": 0.1}
+    assert b["asn"] == "AS13335" and c["ip"] is None and c["avg"] is None
+
+
+def test_hosts_and_mtr_commands():
+    assert st.parse_host("1.1.1.1") == {"host": "1.1.1.1", "probe": "icmp"}
+    assert st.parse_host("tcp://example.com:443") == {"host": "example.com", "probe": "tcp", "port": 443}
+    assert st.parse_host("tcp://[2606:4700::1111]:53")["host"] == "2606:4700::1111"
+    assert st.parse_host("dns://9.9.9.9/example.org") == {"host": "9.9.9.9", "probe": "dns", "lookup": "example.org"}
+    for bad in (dict(host="-oops"), dict(host="h", probe="tcp", port=None), dict(host="h", probe="tcp", port=70000),
+                dict(host="h", probe="dns", lookup="a b"), dict(host="h", probe="curl")):
+        try:
+            target("x", **bad)
+        except ValueError:
+            continue
+        raise AssertionError(bad)
+    st.ASN_LOOKUP = True
+    assert st.mtr_command(target("a", "1.1.1.1")) == ["mtr", "--json", "-n", "-c", "10", "-z", "1.1.1.1"]
+    assert st.mtr_command(target("b", "h", probe="tcp", port=443))[-4:] == ["-T", "-P", "443", "h"]
+    cmd = st.mtr_command(target("c", "9.9.9.9", probe="dns", lookup="example.org"))
+    assert cmd[-6:] == ["-u", "-P", "53", "--localport", str(st.flow_port("c")), "9.9.9.9"]
 
 
 def test_route_segments():
@@ -46,8 +116,7 @@ def test_route_segments():
 
 
 def test_loss_origin():
-    rate_limited = [hop(1, "a"), hop(2, "b", 50), hop(3, "c")]
-    assert st.loss_origin(rate_limited) is None              # loss does not reach the end: ICMP rate-limit
+    assert st.loss_origin([hop(1, "a"), hop(2, "b", 50), hop(3, "c")]) is None    # rate-limiting
     real = [hop(1, "a"), hop(2, "b", 40), hop(3, "c"), hop(4, "d", 10), hop(5, None, 100), hop(6, "e", 10)]
     assert st.loss_origin(real) == 4                         # persists to the end, silent hop skipped
 
@@ -60,30 +129,32 @@ def test_diff_hops():
     assert {r["state"] for r in st.diff_hops(None, cur)} == {None}
 
 
-def test_status_and_bucketize():
+def test_status_thresholds_and_bucketize():
     now = 10_000
     assert st.status_of(now, None, None, None, None) == "stale"
     assert st.status_of(now, now, None, 100.0, 20) == "down"
     assert st.status_of(now, now, 20, 25.0, 20) == "crit"
     assert st.status_of(now, now, 41, 0.0, 20) == "warn"     # 41 > 20 * 1.5 + 10
     assert st.status_of(now, now, 39, 0.0, 20) == "ok"
+    strict = {"loss_warn": 1.0, "loss_crit": 5.0, "latency_warn": 30.0}
+    assert st.status_of(now, now, 20, 5.0, 20, strict) == "crit"
+    assert st.status_of(now, now, 31, 0.0, 30, strict) == "warn"   # above its own latency limit
+    assert st.status_of(now, now, 20, 10.0, 20, {"loss_warn": 15.0}) == "ok"
     rows = [(0, 10.0, 0.0, 1.0, json.dumps([9.0, 10.0, 11.0])), (300, 20.0, 50.0, None, json.dumps([20.0]))]
     (pt,) = st.bucketize(rows, 600)
     assert pt[0] == 0 and pt[1] == 10.5 and pt[2] == 25.0 and pt[3] == 1.0 and len(pt[4]) == st.PINGS
 
 
-def test_slug():
-    assert st.slug("Serviços-VPS Frankfurt") == "servicos-vps-frankfurt"
-
-
-def test_load_targets_rejects_option_like_host():
+def test_load_targets():
     with tempfile.TemporaryDirectory() as d:
         ok, bad = Path(d, "ok.ini"), Path(d, "bad.ini")
-        ok.write_text("[Internet]\nCloudflare DNS = 1.1.1.1  # comentário\n", encoding="utf-8")
+        ok.write_text("[Internet]\nCloudflare DNS = 1.1.1.1  # comment\nShop = tcp://shop.example:443\n"
+                      "[Serviços]\nResolver = dns://9.9.9.9/example.org\n", encoding="utf-8")
         bad.write_text("[x]\nevil = -f/etc/passwd\n", encoding="utf-8")
-        assert st.load_targets(ok) == [{"id": "internet-cloudflare-dns", "group": "Internet",
-                                        "name": "Cloudflare DNS", "host": "1.1.1.1",
-                                        "slaves": None, "master": True}]
+        t = st.load_targets(ok)
+        assert [x["id"] for x in t] == ["internet-cloudflare-dns", "internet-shop", "servicos-resolver"]
+        assert (t[0]["probe"], t[1]["probe"], t[1]["port"], t[2]["lookup"]) == ("icmp", "tcp", 443, "example.org")
+        assert t[0]["slaves"] is None and t[0]["master"]
         try:
             st.load_targets(bad)
         except SystemExit:
@@ -92,66 +163,7 @@ def test_load_targets_rejects_option_like_host():
             raise AssertionError("option-like host accepted")
 
 
-def test_trace_detail_compares_previous_route():
-    A = [hop(1, "a"), hop(2, "b")]
-    B = [hop(1, "a"), hop(2, "x")]
-    with tempfile.TemporaryDirectory() as d:
-        db = Path(d, "t.db")
-        st.init_db(db, "local")
-        st.store(db, [], [("local", "t", ts, json.dumps(h)) for ts, h in ((0, A), (300, A), (600, B), (900, B))], 900)
-        with st.db_open(db) as c:
-            r = st.trace_detail(c, "local", "t", None, "route")
-            assert (r["cur"]["ts"], r["cur"]["label"], r["prev"]["ts"], r["prev"]["label"]) == (900, "B", 300, "A")
-            assert [x["state"] for x in r["rows"]] == ["same", "changed"]
-            r = st.trace_detail(c, "local", "t", 299, "route")   # inside the first route: falls back to previous round
-            assert r["fallback"] and r["cur"]["ts"] == 0 and r["prev"] is None
-            assert st.trace_detail(c, "local", "t", 900, "round")["prev"]["ts"] == 600
-            assert st.trace_detail(c, "porto", "t", None, "route") == {"cur": None}   # sources never mix
-
-
-def test_old_database_is_upgraded():
-    with tempfile.TemporaryDirectory() as d:
-        db = Path(d, "old.db")
-        with st.db_open(db) as c:   # the 0.1 schema
-            c.execute("CREATE TABLE ping (target TEXT, ts INTEGER, median REAL, loss REAL, jitter REAL, rtts TEXT,"
-                      " PRIMARY KEY (target, ts)) WITHOUT ROWID")
-            c.execute("CREATE TABLE trace (target TEXT, ts INTEGER, hops TEXT, PRIMARY KEY (target, ts)) WITHOUT ROWID")
-            c.execute("INSERT INTO ping VALUES ('t', 300, 10.0, 0.0, 1.0, '[10.0]')")
-            c.execute("INSERT INTO trace VALUES ('t', 300, '[]')")
-        st.init_db(db, "home")
-        st.init_db(db, "home")      # idempotent
-        with st.db_open(db) as c:
-            assert c.execute("SELECT * FROM ping").fetchall() == [("home", "t", 300, 10.0, 0.0, 1.0, "[10.0]")]
-            assert c.execute("SELECT source, target, ts FROM trace").fetchall() == [("home", "t", 300)]
-
-
-def test_clean_round():
-    now = 1_000_000
-    good = {"ts": now - 7, "pings": {"t": [1.5, None]},
-            "traces": {"t": [{"ttl": 1, "ip": "10.0.0.1", "loss": 0, "avg": 1.2, "extra": "dropped"},
-                             {"ttl": 2, "ip": None, "loss": 100}]}}
-    ts, pings, traces = st.clean_round(good, {"t"}, now)
-    assert ts == (now - 7) // st.STEP * st.STEP and pings == {"t": [1.5, None]}
-    assert traces["t"][0] == {"ttl": 1, "ip": "10.0.0.1", "loss": 0.0, "avg": 1.2, "best": None, "wrst": None, "sd": None}
-    assert st.clean_round({"ts": now, "pings": None, "traces": {}}, {"t"}, now)[1] is None   # fping failed there
-    bad = [
-        {"ts": now, "pings": {"unknown": [1.0]}},                       # target the server does not have
-        {"ts": now, "pings": {"t": [float("nan")]}},
-        {"ts": now, "pings": {"t": ["1"]}},
-        {"ts": True, "pings": {}},
-        {"ts": now - 40 * 86400},                                       # older than the retention
-        {"ts": now, "traces": {"t": [{"ttl": 1, "ip": "1.1.1.1; rm -rf /", "loss": 0}]}},
-        {"ts": now, "traces": {"t": [{"ttl": 99, "ip": None, "loss": 0}]}},
-        {"ts": now, "traces": {"t": ["x"]}},
-        [],
-    ]
-    for b in bad:
-        try:
-            st.clean_round(b, {"t"}, now)
-        except (ValueError, KeyError, TypeError, AttributeError):
-            continue
-        raise AssertionError(f"accepted {b!r}")
-
+# ---------- SmokePing ----------
 
 SMOKEPING_MAIN = """\
 *** General ***
@@ -165,6 +177,7 @@ secrets = smokeping_secrets
 display_name = Porto
 +Lisbon
 +office
+url = http://office.lan:8100
 
 *** Database ***
 step = 300
@@ -178,6 +191,10 @@ binary = /usr/bin/fping
 pings = 5
 + DNS
 binary = /usr/bin/dig
+lookup = example.org
++ TCPPing
+port = 443
++ Curl
 """
 SMOKEPING_TARGETS = """\
 *** Targets ***
@@ -188,10 +205,12 @@ title = Network
 + Internet
 menu = Internet
 title = The internet
+loss_warn = 10
 
 ++ Cloudflare
 menu = Cloudflare DNS
 host = 1.1.1.1
+latency_warn = 40
 
 ++ Fast
 probe = FPingFast
@@ -200,6 +219,15 @@ host = 8.8.8.8
 ++ Resolver
 probe = DNS
 host = 9.9.9.9
+
+++ Shop
+probe = TCPPing
+host = shop.example
+port = 8443
+
+++ Page
+probe = Curl
+host = example.org
 
 ++ Both
 host = /Internet/Cloudflare /Internet/Fast
@@ -227,39 +255,36 @@ def smokeping_dir(d):
     return Path(d, "config")
 
 
-def args(**kw):
-    import argparse
-    base = dict(smokeping=None, targets=Path("nowhere.ini"), agents="", name="home")
-    return argparse.Namespace(**{**base, **kw})
-
-
 def test_smokeping_config():
     with tempfile.TemporaryDirectory() as d:
         cfg = st.load_config(args(smokeping=smokeping_dir(d)))
         t = {x["id"]: x for x in cfg["targets"]}
-        assert list(t) == ["internet-cloudflare", "internet-fast", "remote-vps", "remote-vps-deep"], list(t)  # no DNS, no multi-host
-        assert (t["internet-cloudflare"]["group"], t["internet-cloudflare"]["name"]) == ("Internet", "Cloudflare DNS")
-        assert t["internet-cloudflare"]["slaves"] == [] and t["internet-cloudflare"]["master"]
-        assert t["internet-fast"]["host"] == "8.8.8.8"                       # FPingFast is an FPing
+        assert list(t) == ["internet-cloudflare", "internet-fast", "internet-resolver", "internet-shop",
+                           "remote-vps", "remote-vps-deep"], list(t)               # no Curl, no multi-host
+        c = t["internet-cloudflare"]
+        assert (c["group"], c["name"], c["probe"]) == ("Internet", "Cloudflare DNS", "icmp")
+        assert (c["loss_warn"], c["latency_warn"], c["loss_crit"]) == (10.0, 40.0, None)   # inherited, own, default
+        assert c["slaves"] == [] and c["master"]
+        assert t["internet-fast"]["probe"] == "icmp"                             # FPingFast is an FPing
+        assert (t["internet-resolver"]["probe"], t["internet-resolver"]["lookup"]) == ("dns", "example.org")
+        assert (t["internet-shop"]["probe"], t["internet-shop"]["port"]) == ("tcp", 8443)   # the target's port wins
         assert t["remote-vps"]["name"] == "VPS in Frankfurt" and not t["remote-vps"]["master"]
         assert t["remote-vps"]["slaves"] == ["porto"]
         assert t["remote-vps-deep"]["group"] == "Remote / VPS in Frankfurt"
-        assert t["remote-vps-deep"]["slaves"] == ["porto", "office"] and not t["remote-vps-deep"]["master"]  # inherited
-        assert cfg["agents"] == {"porto": "short", "office": "a-long-enough-office-secret"}   # Lisbon: no secret, bad name
+        assert t["remote-vps-deep"]["slaves"] == ["porto", "office"] and not t["remote-vps-deep"]["master"]
+        assert cfg["agents"] == {"porto": {"token": "short", "url": None},
+                                 "office": {"token": "a-long-enough-office-secret", "url": "http://office.lan:8100"}}
         assert (cfg["step"], cfg["pings"]) == (300, 10)
         assert len(cfg["files"]) == 4                                         # config, Probes, Targets, secrets
-        cfg = st.load_config(args(smokeping=smokeping_dir(d + "/x") if False else Path(d, "config"),
-                                  agents="porto=0123456789abcdefXYZ"))
-        assert cfg["agents"]["porto"] == "0123456789abcdefXYZ"                # AGENTS wins over the secrets file
+        cfg = st.load_config(args(smokeping=Path(d, "config"), agents="porto=0123456789abcdefXYZ"))
+        assert cfg["agents"]["porto"]["token"] == "0123456789abcdefXYZ"        # AGENTS wins over the secrets file
         sources = ["home", "porto", "office"]
         assert st.probers(t["internet-cloudflare"], sources) == ["home"]
-        assert st.probers(t["remote-vps"], sources) == ["porto"]
         assert st.probers(t["remote-vps-deep"], sources) == ["porto", "office"]
         assert st.probers({"id": "x"}, sources) == sources                   # targets.ini: everyone probes everything
 
 
 def test_bare_targets_file_and_reload():
-    import os
     with tempfile.TemporaryDirectory() as d:
         f = Path(d, "Targets")
         f.write_text("probe = FPing\n+ LAN\n++ Router\nhost = 192.168.1.1\n", encoding="utf-8")
@@ -267,24 +292,26 @@ def test_bare_targets_file_and_reload():
         st.apply_config(a, st.load_config(a))
         assert [t["id"] for t in st.Handler.targets] == ["lan-router"] and st.Handler.sources == ["home"]
         f.write_text("+ LAN\n++ Router\nhost = 192.168.1.1\n++ NAS\nhost = 192.168.1.20\n", encoding="utf-8")
-        os.utime(f, (1000, 1000))                                              # a different mtime, whatever the clock
+        os.utime(f, (1000, 1000))                                             # a different mtime, whatever the clock
         st.maybe_reload(a)
         assert [t["id"] for t in st.Handler.targets] == ["lan-router", "lan-nas"]
         f.write_text("+ LAN\n++ Router\nhost = -oops\n++ Bad\nhost = /x\n", encoding="utf-8")
         os.utime(f, (2000, 2000))
         st.maybe_reload(a)                                                    # bad hosts are skipped, not fatal
         assert [t["id"] for t in st.Handler.targets] == []
-        Path(d, "Targets").write_text("*** Database ***\nstep = 5\n", encoding="utf-8")
+        f.write_text("*** Database ***\nstep = 5\n", encoding="utf-8")
         os.utime(f, (3000, 3000))
         st.maybe_reload(a)                                                    # invalid: the last good config stays
         assert st.STEP == 300
 
 
 def test_parse_agents():
-    assert st.parse_agents("porto=0123456789abcdef, lisbon=fedcba9876543210", "local") == {
-        "porto": "0123456789abcdef", "lisbon": "fedcba9876543210"}
+    assert st.parse_agents("porto=0123456789abcdef, office=fedcba9876543210@http://office:8100", "local") == {
+        "porto": {"token": "0123456789abcdef", "url": None},
+        "office": {"token": "fedcba9876543210", "url": "http://office:8100"}}
     assert st.parse_agents("", "local") == {}
-    for spec in ("porto=short", "Porto=0123456789abcdef", "local=0123456789abcdef", "porto"):
+    for spec in ("porto=short", "Porto=0123456789abcdef", "local=0123456789abcdef", "porto",
+                 "porto=0123456789abcdef@ftp://x"):
         try:
             st.parse_agents(spec, "local")
         except SystemExit:
@@ -292,49 +319,307 @@ def test_parse_agents():
         raise AssertionError(spec)
 
 
-def test_agent_push_end_to_end():
-    import threading
-    import urllib.error
-    import urllib.request
+# ---------- RRD import ----------
+
+def test_rrd_fetch_parsing():
+    text = ("                          uptime               loss             median              ping1              ping2\n"
+            "\n"
+            "1792400100: 1.0000000000e+03 0.0000000000e+00 1.2000000000e-02 1.1000000000e-02 1.3000000000e-02\n"
+            "1792400400: -nan 2.0000000000e+00 -nan -nan -nan\n"
+            "1792400700: -nan -nan -nan -nan -nan\n")
+    names, data = st.parse_rrd_fetch(text)
+    assert names == ["uptime", "loss", "median", "ping1", "ping2"] and len(data) == 3
+    rows = st.rrd_rows("home", "lan-router", names, data, 300)
+    assert rows[0] == ("home", "lan-router", 1792399800, 12.0, 0.0, None, "[11.0, 13.0]")
+    assert rows[1][3:5] == (None, 100.0) and len(rows) == 2                  # all lost; the unknown row is dropped
+
+
+# ---------- storage ----------
+
+def test_trace_detail_compares_previous_route():
+    A = [hop(1, "a", asn="AS1"), hop(2, "b")]
+    B = [hop(1, "a", asn="AS1"), hop(2, "x", asn="AS2")]
     with tempfile.TemporaryDirectory() as d:
-        db = Path(d, "s.db")
+        db = Path(d, "t.db")
         st.init_db(db, "local")
-        st.Handler.db, st.Handler.sources = db, ["local", "porto"]
-        st.Handler.targets = [{"id": "t", "group": "g", "name": "T", "host": "10.0.0.9"},
-                              {"id": "u", "group": "g", "name": "U", "host": "10.0.0.8", "slaves": ["office"]}]
-        st.Handler.agents = {"porto": "0123456789abcdef"}
-        srv = st.ThreadingHTTPServer(("127.0.0.1", 0), st.Handler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        url = f"http://127.0.0.1:{srv.server_address[1]}"
+        st.store(db, [], [("local", "t", ts, json.dumps(h)) for ts, h in ((0, A), (300, A), (600, B), (900, B))], 900)
+        with st.db_open(db) as c:
+            assert sorted(r[0] for r in c.execute("SELECT asn FROM asn WHERE name IS NULL")) == ["AS1", "AS2"]
+            c.execute("UPDATE asn SET name='ONE - First Net' WHERE asn='AS1'")
+        with st.db_open(db) as c:
+            r = st.trace_detail(c, "local", "t", None, "route")
+            assert (r["cur"]["ts"], r["cur"]["label"], r["prev"]["ts"], r["prev"]["label"]) == (900, "B", 300, "A")
+            assert [x["state"] for x in r["rows"]] == ["same", "changed"]
+            assert r["asn_names"] == {"AS1": "ONE - First Net", "AS2": None}
+            r = st.trace_detail(c, "local", "t", 299, "route")   # inside the first route: falls back to previous round
+            assert r["fallback"] and r["cur"]["ts"] == 0 and r["prev"] is None
+            assert st.trace_detail(c, "local", "t", 900, "round")["prev"]["ts"] == 600
+            assert st.trace_detail(c, "porto", "t", None, "route") == {"cur": None}   # sources never mix
 
-        def call(path, body=None, token="0123456789abcdef"):
-            req = urllib.request.Request(url + path, data=body and json.dumps(body).encode(),
-                                         headers={"Authorization": f"Bearer {token}"})
-            with urllib.request.urlopen(req, timeout=5) as r:
-                return json.load(r)
 
+def test_old_database_is_upgraded():
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d, "old.db")
+        with st.db_open(db) as c:   # the 0.1 schema
+            c.execute("CREATE TABLE ping (target TEXT, ts INTEGER, median REAL, loss REAL, jitter REAL, rtts TEXT,"
+                      " PRIMARY KEY (target, ts)) WITHOUT ROWID")
+            c.execute("CREATE TABLE trace (target TEXT, ts INTEGER, hops TEXT, PRIMARY KEY (target, ts)) WITHOUT ROWID")
+            c.execute("INSERT INTO ping VALUES ('t', 300, 10.0, 0.0, 1.0, '[10.0]')")
+            c.execute("INSERT INTO trace VALUES ('t', 300, '[]')")
+        st.init_db(db, "home")
+        st.init_db(db, "home")      # idempotent
+        with st.db_open(db) as c:
+            assert c.execute("SELECT * FROM ping").fetchall() == [("home", "t", 300, 10.0, 0.0, 1.0, "[10.0]")]
+            assert c.execute("SELECT source, target, ts FROM trace").fetchall() == [("home", "t", 300)]
+
+
+def test_clean_round():
+    now = 1_000_000
+    good = {"ts": now - 7, "pings": {"t": [1.5, None]},
+            "traces": {"t": [{"ttl": 1, "ip": "10.0.0.1", "asn": "AS64496", "loss": 0, "avg": 1.2, "extra": "dropped"},
+                             {"ttl": 2, "ip": None, "loss": 100}]}}
+    ts, pings, traces = st.clean_round(good, {"t"}, now)
+    assert ts == (now - 7) // st.STEP * st.STEP and pings == {"t": [1.5, None]}
+    assert traces["t"][0] == {"ttl": 1, "ip": "10.0.0.1", "asn": "AS64496", "loss": 0.0, "avg": 1.2, "best": None,
+                              "wrst": None, "sd": None}
+    assert st.clean_round({"ts": now, "pings": None, "traces": {}}, {"t"}, now)[1] is None   # fping failed there
+    bad = [
+        {"ts": now, "pings": {"unknown": [1.0]}},                       # target the server does not give that agent
+        {"ts": now, "pings": {"t": [float("nan")]}},
+        {"ts": now, "pings": {"t": ["1"]}},
+        {"ts": True, "pings": {}},
+        {"ts": now - 40 * 86400},                                       # older than the retention
+        {"ts": now, "traces": {"t": [{"ttl": 1, "ip": "1.1.1.1; rm -rf /", "loss": 0}]}},
+        {"ts": now, "traces": {"t": [{"ttl": 1, "ip": "1.1.1.1", "asn": "<script>", "loss": 0}]}},
+        {"ts": now, "traces": {"t": [{"ttl": 99, "ip": None, "loss": 0}]}},
+        {"ts": now, "traces": {"t": ["x"]}},
+        [],
+    ]
+    for b in bad:
         try:
-            got = call("/api/agent/targets")
-            assert got["targets"] == [{"id": "t", "host": "10.0.0.9"}] and got["pings"] == st.PINGS   # not office's "u"
-            now = int(__import__("time").time())
-            call("/api/agent/push", {"ts": now, "pings": {"t": [5.0] * 20},
-                                     "traces": {"t": [{"ttl": 1, "ip": "10.0.0.9", "loss": 0, "avg": 5.0}]}})
-            ov = call(f"/api/overview?src=porto")
-            assert ov["targets"][0]["status"] == "ok" and ov["targets"][0]["by_source"] == {"local": "stale", "porto": "ok"}
-            assert [s["name"] for s in ov["sources"]] == ["local", "porto"]
-            for path, body, token in (("/api/agent/targets", None, "wrong-token-xxxxxx"),
-                                      ("/api/agent/push", {"ts": now, "pings": {"x": [1.0]}}, "0123456789abcdef"),
-                                      ("/api/agent/push", {"ts": now, "pings": {"u": [1.0]}}, "0123456789abcdef"),
-                                      ("/api/overview?src=nowhere", None, "")):
-                try:
-                    call(path, body, token)
-                except urllib.error.HTTPError as e:
-                    assert e.code in (400, 401), e.code
-                else:
-                    raise AssertionError(path)
+            st.clean_round(b, {"t"}, now)
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue
+        raise AssertionError(f"accepted {b!r}")
+    assert st.agent_targets([{"id": "ok", "host": "1.1.1.1", "probe": "icmp", "port": None, "lookup": None},
+                             {"id": "bad", "host": "-x", "probe": "icmp"}, "junk"]) == [
+        {"id": "ok", "host": "1.1.1.1", "probe": "icmp", "port": None, "lookup": None}]
+
+
+# ---------- probes over loopback ----------
+
+def test_tcp_and_dns_probes():
+    st.PINGS = 2
+    try:
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+        port = listener.getsockname()[1]
+        threading.Thread(target=lambda: [listener.accept()[0].close() for _ in range(2)], daemon=True).start()
+        got = st.tcp_ping(target("w", "127.0.0.1", probe="tcp", port=port))
+        assert len(got) == 2 and all(v is not None and v < 1000 for v in got), got
+        listener.close()
+
+        dns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)   # a resolver that answers one TXT record
+        dns.bind(("127.0.0.1", 0))
+
+        def answer():
+            for _ in range(3):
+                q, peer = dns.recvfrom(512)
+                qend = 12 + q[12:].index(b"\0") + 5
+                txt = b"13335 | US | arin | 2010-07-14 | CLOUDFLARENET - Cloudflare, Inc., US"
+                ans = b"\xc0\x0c" + struct.pack(">HHIH", 16, 1, 60, len(txt) + 1) + bytes([len(txt)]) + txt
+                dns.sendto(q[:2] + b"\x81\x80" + struct.pack(">HHHH", 1, 1, 0, 0) + q[12:qend] + ans, peer)
+        threading.Thread(target=answer, daemon=True).start()
+        server = dns.getsockname()
+
+        orig = socket.getaddrinfo
+        socket.getaddrinfo = lambda h, p, **kw: orig(h, server[1] if p == 53 else p, **kw)   # port 53 -> our port
+        try:
+            got = st.dns_ping(target("r", "127.0.0.1", probe="dns", lookup="example.org"))
+            assert len(got) == 2 and all(v is not None for v in got), got
+            assert st.dns_txt("AS13335.asn.cymru.com", "127.0.0.1")[0].endswith("Cloudflare, Inc., US")
+        finally:
+            socket.getaddrinfo = orig
+            dns.close()
+    finally:
+        st.PINGS = st.DEFAULT_PINGS
+
+
+# ---------- the server over HTTP ----------
+
+def server_with(d, **handler):
+    db = Path(d, "s.db")
+    st.init_db(db, "local")
+    st.Handler.db = db
+    st.Handler.sources = ["local", "porto", "office"]
+    st.Handler.targets = [target("t"), target("u", "10.0.0.8", slaves=["office"])]
+    st.Handler.agents = {"porto": {"token": TOKEN, "url": None}, "office": {"token": "office-" + TOKEN, "url": None}}
+    for k, v in handler.items():
+        setattr(st.Handler, k, v)
+    return (db, *serve(st.Handler))
+
+
+def test_agent_push_end_to_end():
+    with tempfile.TemporaryDirectory() as d:
+        db, srv, url = server_with(d)
+        try:
+            got = call(url + "/api/agent/targets")
+            assert [t["id"] for t in got["targets"]] == ["t"] and got["pings"] == st.PINGS   # not office's "u"
+            assert got["targets"][0] == {"id": "t", "host": "10.0.0.9", "probe": "icmp", "port": None, "lookup": None}
+            now = int(time.time())
+            call(url + "/api/agent/push", {"ts": now, "pings": {"t": [5.0] * 20},
+                                           "traces": {"t": [{"ttl": 1, "ip": "10.0.0.9", "loss": 0, "avg": 5.0}]}})
+            ov = call(url + "/api/overview?src=porto")
+            assert [t["id"] for t in ov["targets"]] == ["t"]                  # porto does not probe "u"
+            assert ov["targets"][0]["status"] == "ok" and ov["targets"][0]["by_source"] == {"local": "stale", "porto": "ok", "office": "stale"}
+            assert [s["name"] for s in ov["sources"]] == ["local", "porto", "office"] and ov["auth"] is False
+            expect_http(401, lambda: call(url + "/api/agent/targets", token="wrong-token-xxxxxx"))
+            expect_http(400, lambda: call(url + "/api/agent/push", {"ts": now, "pings": {"u": [1.0]}}))
+            expect_http(400, lambda: call(url + "/api/overview?src=nowhere"))
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+def test_sign_in_and_metrics():
+    with tempfile.TemporaryDirectory() as d:
+        db, srv, url = server_with(d)
+        st.PASSWORD, st.METRICS_TOKEN = "correct horse", "metrics-" + TOKEN
+        st.Handler.metrics_cache = (0, "")
+        try:
+            now = int(time.time())
+            st.store(db, *st.round_rows("local", now // 300 * 300, {"t": [10.0, 12.0, None, 11.0]}, {}), now)
+            expect_http(401, lambda: call(url + "/api/overview"))
+            page = urllib.request.urlopen(url + "/", timeout=5)                 # redirected to the sign-in page
+            assert page.url.endswith("/login") and "Password" in page.read().decode()
+            e = expect_http(401, lambda: call(url + "/login", form="password=wrong"))
+            assert "Wrong password" in e.read().decode()
+
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, *a, **kw):
+                    return None
+            try:
+                urllib.request.build_opener(NoRedirect).open(url + "/login", data=b"password=correct+horse", timeout=5)
+            except urllib.error.HTTPError as e:
+                assert e.code == 303
+                cookie = e.headers["Set-Cookie"].split(";")[0]
+                assert "HttpOnly" in e.headers["Set-Cookie"] and "SameSite=Strict" in e.headers["Set-Cookie"]
+            ov = call(url + "/api/overview", cookie=cookie)
+            assert ov["auth"] is True and ov["targets"][0]["median"] == 11.0
+            forged = "smoketrace=" + str(int(time.time()) + 999) + ".00"
+            expect_http(401, lambda: call(url + "/api/overview", cookie=forged))
+
+            expect_http(401, lambda: call(url + "/metrics", token="wrong"))
+            text = call(url + "/metrics", token=st.METRICS_TOKEN)
+            assert 'smoketrace_median_seconds{target="t",name="T",group="g",host="10.0.0.9",probe="icmp",source="local"} 0.011' in text
+            assert 'smoketrace_loss_ratio{target="t",name="T",group="g",host="10.0.0.9",probe="icmp",source="local"} 0.25' in text
+            assert 'smoketrace_status{target="t",name="T",group="g",host="10.0.0.9",probe="icmp",source="porto"} 4' in text
+            assert "# TYPE smoketrace_route_changes_24h gauge" in text
+        finally:
+            st.PASSWORD = st.METRICS_TOKEN = None
+            srv.shutdown()
+            srv.server_close()
+
+
+def test_pull_round_trip():
+    """The pull agent's HTTP side: targets in, rounds out, acknowledged rounds dropped."""
+    with tempfile.TemporaryDirectory() as d:
+        db, srv, url = server_with(d)
+        srv.shutdown()
+        srv.server_close()
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        ticks = []
+        orig = st.every_round
+        st.every_round = lambda fn: ticks.append(fn)     # keep the agent's round function, do not loop
+        try:
+            threading.Thread(target=st.run_listener,
+                             args=(f"127.0.0.1:{port}", "pull-" + TOKEN,
+                                   lambda targets, ts: {t["id"]: [7.0] * 20 for t in targets},
+                                   lambda t, ts: [hop(1, "10.0.0.9")]), daemon=True).start()
+            for _ in range(50):
+                if ticks:
+                    break
+                time.sleep(0.05)
+            time.sleep(0.3)
+            agent = {"token": "pull-" + TOKEN, "url": f"http://127.0.0.1:{port}"}
+            st.Handler.agents["office"] = agent
+            st.pull_agent(db, "office", agent)                 # the agent learns its targets ("t" and "u")
+            now = int(time.time()) // 300 * 300
+            ticks[0](now)                                      # one round on the agent
+            st.pull_agent(db, "office", agent)                 # the server takes it and acknowledges it
+            with st.db_open(db) as c:
+                rows = c.execute("SELECT source, target, ts, median FROM ping ORDER BY target").fetchall()
+            assert rows == [("office", "t", now, 7.0), ("office", "u", now, 7.0)], rows
+            assert st.PULL_ACK["office"] == now
+            st.pull_agent(db, "office", agent)                 # acknowledged: nothing comes twice
+            with st.db_open(db) as c:
+                assert c.execute("SELECT COUNT(*) FROM ping").fetchone()[0] == 2
+        finally:
+            st.every_round = orig
+            st.PULL_ACK.clear()
+
+
+# ---------- alerts ----------
+
+def test_alerts():
+    got = []
+
+    class Sink(BaseHTTPRequestHandler):
+        def do_POST(self):
+            got.append((self.path, dict(self.headers), self.rfile.read(int(self.headers["Content-Length"]))))
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *_):
+            pass
+
+    sink, base = serve(Sink)
+    with tempfile.TemporaryDirectory() as d:
+        db, srv, url = server_with(d)
+        st.Handler.targets = [target("t")]
+        st.Handler.sources = ["local", "porto"]
+        alerts = st.Alerter(base + "/discord", base + "/ntfy", base + "/hook")
+        st.PUBLIC_URL = "https://st.example"
+        A = [hop(1, "10.0.0.1"), hop(2, "198.51.100.1", asn="AS64497"), hop(3, "10.0.0.9")]
+        B = [hop(1, "10.0.0.1"), hop(2, "198.51.100.9", 20, asn="AS64498"), hop(3, "10.0.0.9", 20)]
+        try:
+            now = int(time.time()) // 300 * 300 - 600
+
+            def rnd(i, rtts, hops):
+                ts = now + i * 300
+                st.store(db, *st.round_rows("local", ts, {"t": rtts}, {"t": hops}), ts)
+                alerts.check(db, "local")
+
+            ok, lossy = [10.0] * 20, [10.0] * 15 + [None] * 5
+            rnd(0, ok, A)          # first look: remembered, nothing sent
+            rnd(1, lossy, B)       # one round of crit and a new route: not yet
+            assert not got
+            rnd(2, lossy, B)       # second round: both confirmed
+            for _ in range(50):
+                if len(got) >= 6:
+                    break
+                time.sleep(0.05)
+            assert len(got) == 6, [g[0] for g in got]          # 2 events x 3 channels
+            hooks = [json.loads(g[2]) for g in got if g[0] == "/hook"]
+            status = next(h for h in hooks if h["kind"] == "status")
+            route = next(h for h in hooks if h["kind"] == "route")
+            assert status["level"] == "crit" and status["previous"] == "ok" and status["title"] == "T is critical"
+            assert any("Real loss starts at hop 2 (198.51.100.9, AS64498" in line for line in status["lines"]), status
+            assert "Seen from porto: no data" in status["lines"] and status["url"] == "https://st.example/#/t/t"
+            assert route["title"] == "Route to T changed" and "AS path: AS64497  →  AS64498" in route["lines"]
+            discord = next(json.loads(g[2]) for g in got if g[0] == "/discord")
+            assert discord["embeds"][0]["color"] in (0xEC835A, 0x2A78D6)
+            ntfy = next(g for g in got if g[0] == "/ntfy")
+            assert ntfy[1]["Title"].startswith("=?UTF-8?B?") and ntfy[1]["Priority"] in ("4", "3")
+        finally:
+            st.PUBLIC_URL = None
+            for s in (sink, srv):
+                s.shutdown()
+                s.server_close()
 
 
 if __name__ == "__main__":

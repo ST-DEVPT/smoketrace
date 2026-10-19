@@ -1,0 +1,73 @@
+{
+  "title": "smoketrace",
+  "uid": "smoketrace",
+  "description": "Latency, loss and route changes from smoketrace's /metrics",
+  "tags": ["smoketrace", "network"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {"from": "now-24h", "to": "now"},
+  "templating": {
+    "list": [
+      {"name": "datasource", "type": "datasource", "query": "prometheus", "label": "Prometheus"},
+      {"name": "source", "type": "query", "label": "Seen from", "datasource": {"type": "prometheus", "uid": "${datasource}"},
+       "query": "label_values(smoketrace_status, source)", "multi": true, "includeAll": true, "refresh": 2},
+      {"name": "group", "type": "query", "label": "Group", "datasource": {"type": "prometheus", "uid": "${datasource}"},
+       "query": "label_values(smoketrace_status{source=~\"$source\"}, group)", "multi": true, "includeAll": true, "refresh": 2},
+      {"name": "target", "type": "query", "label": "Target", "datasource": {"type": "prometheus", "uid": "${datasource}"},
+       "query": "label_values(smoketrace_status{source=~\"$source\", group=~\"$group\"}, name)", "multi": true,
+       "includeAll": true, "refresh": 2}
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat", "title": "Targets down", "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "count(smoketrace_status{source=~\"$source\", group=~\"$group\", name=~\"$target\"} == 3) or vector(0)"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}}
+    },
+    {
+      "type": "stat", "title": "Warning or critical", "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "count(smoketrace_status{source=~\"$source\", group=~\"$group\", name=~\"$target\"} == 1 or smoketrace_status{source=~\"$source\", group=~\"$group\", name=~\"$target\"} == 2) or vector(0)"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}}
+    },
+    {
+      "type": "stat", "title": "Route changes, last 24 h", "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "sum(smoketrace_route_changes_24h{source=~\"$source\", group=~\"$group\", name=~\"$target\"}) or vector(0)"}]
+    },
+    {
+      "type": "stat", "title": "Worst loss now", "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "max(smoketrace_loss_ratio{source=~\"$source\", group=~\"$group\", name=~\"$target\"})"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.05}, {"color": "red", "value": 0.2}]}}}
+    },
+    {
+      "type": "timeseries", "title": "Median latency", "gridPos": {"x": 0, "y": 4, "w": 24, "h": 10},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "smoketrace_median_seconds{source=~\"$source\", group=~\"$group\", name=~\"$target\"}", "legendFormat": "{{name}} · {{source}}"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"lineWidth": 2, "spanNulls": false}}}
+    },
+    {
+      "type": "timeseries", "title": "Loss", "gridPos": {"x": 0, "y": 14, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "smoketrace_loss_ratio{source=~\"$source\", group=~\"$group\", name=~\"$target\"}", "legendFormat": "{{name}} · {{source}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"drawStyle": "bars", "fillOpacity": 60}}}
+    },
+    {
+      "type": "timeseries", "title": "Jitter", "gridPos": {"x": 12, "y": 14, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "smoketrace_jitter_seconds{source=~\"$source\", group=~\"$group\", name=~\"$target\"}", "legendFormat": "{{name}} · {{source}}"}],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "type": "state-timeline", "title": "Status", "gridPos": {"x": 0, "y": 22, "w": 24, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "smoketrace_status{source=~\"$source\", group=~\"$group\", name=~\"$target\"}", "legendFormat": "{{name}} · {{source}}"}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {
+        "0": {"text": "OK", "color": "green"}, "1": {"text": "Warning", "color": "yellow"},
+        "2": {"text": "Critical", "color": "orange"}, "3": {"text": "Down", "color": "red"}, "4": {"text": "No data", "color": "gray"}}}]}}
+    }
+  ]
+}

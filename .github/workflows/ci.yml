@@ -40,7 +40,8 @@ jobs:
           import json, urllib.request
           get = lambda p: json.load(urllib.request.urlopen("http://127.0.0.1:8099" + p))
           ov = {t["name"]: t for t in get("/api/overview")["targets"]}
-          assert len(ov) == 6 and ov["VPS Frankfurt"]["status"] == "down", ov
+          assert len(ov) == 7 and ov["VPS Frankfurt"]["status"] == "down", ov
+          assert ov["Shop (HTTPS)"]["probe"] == "tcp" and ov["Shop (HTTPS)"]["port"] == 443
           assert ov["VPS Frankfurt"]["by_source"] == {"local": "down", "porto": "down"}, ov
           assert get(f"/api/overview?src=porto")["source"] == "porto"
           cf = ov["Cloudflare DNS"]["id"]
@@ -56,30 +57,61 @@ jobs:
         run: |
           python -c "import re; s = open('index.html', encoding='utf-8').read(); open('page.js', 'w', encoding='utf-8').write(re.search(r'<script>(.*)</script>', s, re.S).group(1))"
           node --check page.js
+      - name: The Grafana dashboard is valid JSON
+        run: python -m json.tool docs/grafana.json > /dev/null
 
   probes:
-    # the real probes, not the demo: one round of fping and mtr against the runner itself
-    # (hosted runners cannot ping the internet, but loopback is enough to prove the commands and the parsing)
+    # the real probes, not the demo: one round of fping, TCP, DNS and mtr (with AS lookups) against the runner
+    # itself (hosted runners cannot ping the internet, but loopback proves the commands and the parsing);
+    # then SmokePing's RRD history through rrdtool
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-      - run: sudo apt-get update -q && sudo apt-get install -yq fping mtr-tiny
-      - name: One real round against 127.0.0.1
+      - run: sudo apt-get update -q && sudo apt-get install -yq fping mtr-tiny rrdtool
+      - name: One real round against the runner itself (ICMP, TCP, DNS)
         run: |
+          python3 -m http.server 8081 --bind 127.0.0.1 > /dev/null 2>&1 &
+          sleep 1
           sudo python3 - <<'EOF'
           import json, os, tempfile, time
           import smoketrace as st
           db = os.path.join(tempfile.mkdtemp(), "t.db")
           st.init_db(db, "ci")
-          lo = {"id": "lo", "group": "LAN", "name": "lo", "host": "127.0.0.1"}
+          targets = [st.make_target("lo", "LAN", "lo", "127.0.0.1"),
+                     st.make_target("web", "LAN", "web", "127.0.0.1", probe="tcp", port=8081),
+                     st.make_target("dns", "LAN", "dns", "127.0.0.53", probe="dns", lookup="github.com")]
           ts = int(time.time()) // st.STEP * st.STEP
-          st.store(db, *st.round_rows("ci", ts, *st.probe_round([lo], ts, st.fping, st.mtr)), ts)
+          st.store(db, *st.round_rows("ci", ts, *st.probe_round(targets, ts, st.real_ping, st.mtr)), ts)
           with st.db_open(db) as c:
-              s = st.summary(c, "ci", lo, int(time.time()))
-              tr = st.trace_detail(c, "ci", "lo", None, "route")
-          print(json.dumps({k: s[k] for k in ("status", "median", "loss", "jitter")}), tr["cur"]["hops"])
-          assert s["status"] == "ok" and s["loss"] == 0 and s["median"] is not None, s
-          assert tr["cur"]["hops"][-1]["ip"] == "127.0.0.1" and tr["cur"]["hops"][-1]["loss"] == 0, tr
+              for t in targets:
+                  s = st.summary(c, "ci", t, int(time.time()))
+                  tr = st.trace_detail(c, "ci", t["id"], None, "route")
+                  print(t["id"], json.dumps({k: s[k] for k in ("status", "median", "loss")}), tr["cur"] and tr["cur"]["hops"])
+                  assert s["status"] == "ok" and s["loss"] == 0 and s["median"] is not None, (t["id"], s)
+                  assert tr["cur"] and tr["cur"]["hops"][-1]["ip"] == t["host"], (t["id"], tr)
+          EOF
+      - name: SmokePing's RRD history comes in
+        run: |
+          now=$(date +%s)
+          mkdir -p rrd/LAN
+          rrdtool create rrd/LAN/Router.rrd --step 300 --start $(( now - 7200 )) \
+            DS:uptime:GAUGE:600:0:U DS:loss:GAUGE:600:0:20 DS:median:GAUGE:600:0:180 \
+            DS:ping1:GAUGE:600:0:180 DS:ping2:GAUGE:600:0:180 RRA:AVERAGE:0.5:1:1008 RRA:AVERAGE:0.5:12:4320
+          cp rrd/LAN/Router.rrd "rrd/LAN/Router~porto.rrd"
+          for i in 12 11 10 9 8 7 6 5 4 3 2 1; do
+            t=$(( (now / 300 - i) * 300 ))
+            rrdtool update rrd/LAN/Router.rrd $t:100:0:0.010:0.009:0.011
+            rrdtool update "rrd/LAN/Router~porto.rrd" $t:100:1:0.020:0.020:U
+          done
+          python3 smoketrace.py --import-rrd rrd --db rrd.db --name home
+          python3 - <<'EOF'
+          import sqlite3
+          rows = sqlite3.connect("rrd.db").execute("SELECT source, target, median, loss, rtts FROM ping").fetchall()
+          home = [r for r in rows if r[0] == "home"]
+          porto = [r for r in rows if r[0] == "porto"]
+          print(len(home), home[-1:], len(porto), porto[-1:])
+          assert len(home) >= 8 and all(r[1] == "lan-router" and abs(r[2] - 10.0) < 0.01 and r[3] == 0 for r in home)
+          assert porto and all(abs(r[2] - 20.0) < 0.01 and r[3] == 50.0 for r in porto)
           EOF
 
   container:
@@ -129,6 +161,8 @@ jobs:
             sleep 2
           done
           cat ov.json edge.json; exit 1
+      - name: Prometheus metrics
+        run: curl -fs 127.0.0.1:8099/metrics | tee metrics.txt | grep -q 'smoketrace_median_seconds{target="lan-loopback"'
       - name: Docker reports the server healthy
         run: |
           for i in $(seq 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' server)" = healthy ] && exit 0; sleep 2; done

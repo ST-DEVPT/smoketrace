@@ -103,6 +103,9 @@ td small { display: block; font-size: 11px; color: var(--ink-2); line-height: 1.
 .toolbar .srcbar { margin: 0; }
 td.srcs { white-space: nowrap; }
 .sv { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; font-size: 12px; color: var(--ink-2); }
+.out { display: inline-flex; align-items: center; height: 28px; font-size: 12px; text-decoration: none; }
+.out[hidden] { display: none; }
+.asn { display: block; font-size: 11px; color: var(--ink-2); line-height: 1.2; max-width: 30ch; overflow: hidden; text-overflow: ellipsis; }
 .lang { height: 28px; padding: 0 10px; font-size: 12px; font-weight: 600; letter-spacing: .04em; }
 
 /* detail */
@@ -205,6 +208,7 @@ details .tablewrap { max-height: 420px; overflow: auto; }
   <label class="search"><span hidden>Search</span><input id="q" type="search" autocomplete="off"></label>
   <span class="updated" id="updated" aria-live="polite"></span>
   <button class="btn lang" id="lang" data-act="lang"></button>
+  <a class="btn out" id="out" href="/logout" hidden></a>
 </header>
 <div class="banner" id="banner" role="alert" hidden>
   <span></span>
@@ -266,7 +270,7 @@ const I18N = {
     fallback: "No route change in this target's history: comparing with the previous round.",
     cAvg: "Average", cSd: "Std dev", cDelta: "Δ average", cHop: "Hop", cTime: "Time", cMin: "Min", cMax: "Max",
     foot: "Loss on one intermediate hop only is ICMP rate-limiting, not real loss. What counts is loss that starts at a hop and lasts to the destination.",
-    langBtn: "PT", langTitle: "Português",
+    langBtn: "PT", langTitle: "Português", signOut: "Sign out", asChanged: "AS path changed",
   },
   pt: {
     ok: "OK", warn: "Aviso", crit: "Crítico", down: "Em baixo", stale: "Sem dados",
@@ -306,7 +310,7 @@ const I18N = {
     fallback: "Sem mudança de rota no histórico deste alvo: a comparar com a ronda anterior.",
     cAvg: "Média", cSd: "Desvio", cDelta: "Δ média", cHop: "Salto", cTime: "Hora", cMin: "Mín", cMax: "Máx",
     foot: "Perda só num salto intermédio = rate-limit de ICMP, não perda real. Conta a perda que começa num salto e se mantém até ao destino.",
-    langBtn: "EN", langTitle: "English",
+    langBtn: "EN", langTitle: "English", signOut: "Sair", asChanged: "caminho de AS mudou",
   },
 };
 const t = (k, ...a) => { const v = I18N[LANG][k] ?? I18N.en[k] ?? k; return typeof v === "function" ? v(...a) : v; };
@@ -338,6 +342,9 @@ const pill = st => `<span class="st">${icon(st)}${t(st)}</span>`;
 const SWAP = '<svg class="ic" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 3.5h8.2L7.4 1.7l.9-.9L11.6 4 8.3 7.2l-.9-.9 1.8-1.8H1zm10 5H2.8l1.8 1.8-.9.9L.4 8l3.3-3.2.9.9-1.8 1.8H11z"/></svg>';
 
 const routeVar = i => i < 3 ? `--route-${i + 1}` : "--route-x";
+const hostOf = tg => esc(tg.probe === "tcp" ? `${tg.host} · TCP ${tg.port}`
+  : tg.probe === "dns" ? `${tg.lookup} @ ${tg.host} · DNS` : tg.host);
+const asName = n => n ? n.split(" - ").pop() : "";
 const rb = (labelTxt, i) => `<span class="rb" style="--c:var(${routeVar(i)})" title="${t("route")} ${esc(labelTxt)}">${esc(labelTxt)}</span>`;
 
 // ---------- state ----------
@@ -351,6 +358,7 @@ const srcQ = () => S.src ? `&src=${encodeURIComponent(S.src)}` : "";
 
 async function api(path) {
   const r = await fetch(path, { cache: "no-store" });
+  if (r.status === 401) { location.href = "/login"; throw new Error("sign in"); }
   if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; }
   return r.json();
 }
@@ -371,6 +379,7 @@ async function refresh() {
     setOffline(false);
   } catch { setOffline(true); }
   renderChips(); tick();
+  $("#out").hidden = !S.ov?.auth;
   if (S.id) await loadDetail(); else renderOverview();
 }
 
@@ -448,7 +457,7 @@ function rowHtml(tg) {
     `<span class="sv" title="${esc(s)}: ${t(st)}">${icon(st)}${esc(s)}</span>`).join("")}</td>`;
   return `<tr class="row s-${tg.status}" data-id="${esc(tg.id)}">
     <td>${pill(tg.status)}</td>
-    <td class="name"><a href="#/t/${esc(tg.id)}">${esc(tg.name)}</a><span class="mono">${esc(tg.host)}</span></td>
+    <td class="name"><a href="#/t/${esc(tg.id)}">${esc(tg.name)}</a><span class="mono">${hostOf(tg)}</span></td>
     <td class="num">${msU(tg.median)}${delta}</td>
     <td class="num col-jit">${msU(tg.jitter)}</td>
     <td class="num${tg.loss > 0 ? " lossy" : ""}">${pct(tg.loss)}</td>
@@ -544,7 +553,7 @@ function renderDetail() {
   }
   const tg = d.target, segs = d.segments, cur = segs[segs.length - 1];
   const changes = segs.filter(s => s.change).length;
-  $("#dhead").innerHTML = `<div><div class="eyebrow">${esc(tg.group)}</div><h1>${esc(tg.name)}</h1><div class="mono muted">${esc(tg.host)}</div></div>${pill(tg.status)}`;
+  $("#dhead").innerHTML = `<div><div class="eyebrow">${esc(tg.group)}</div><h1>${esc(tg.name)}</h1><div class="mono muted">${hostOf(tg)}</div></div>${pill(tg.status)}`;
   const rangeLbl = RANGES.find(r => r[0] === S.range)?.[1] || "";
   const kpi = (k, v, s) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   $("#kpis").innerHTML =
@@ -625,10 +634,14 @@ function drawChart() {
 
   // smoke: nested min..max bands of the sorted pings, darker towards the median (SmokePing style)
   g.fillStyle = `rgba(${C["--smoke"]},.11)`;
-  for (const p of pts) {
+  const widths = pts.map((p, i) => {
+    const next = pts[i + 1]?.[0], gap = next == null ? d.bucket : next - p[0];
+    return gap <= Math.max(d.bucket, 3600) * 1.5 ? Math.max(bw, gap / (to - from) * pw) : bw;
+  });
+  pts.forEach((p, i) => {
     const s = p[4], n = s.length, x = X(p[0]);
-    for (let k = 0; k < n >> 1; k++) { const yh = Y(s[n - 1 - k]); g.fillRect(x, yh, bw, Math.max(1, Y(s[k]) - yh)); }
-  }
+    for (let k = 0; k < n >> 1; k++) { const yh = Y(s[n - 1 - k]); g.fillRect(x, yh, widths[i], Math.max(1, Y(s[k]) - yh)); }
+  });
 
   // route-change rules, in the colour of the new route, across all three bands
   g.lineWidth = 1.5;
@@ -636,21 +649,23 @@ function drawChart() {
 
   // median
   g.strokeStyle = C["--ink"]; g.lineWidth = 1.75; g.lineJoin = "round"; g.beginPath();
-  let pen = false, last = null;
+  let pen = false, last = null, spacing = d.bucket;
   for (const p of pts) {
-    if (p[1] == null || (last != null && p[0] - last > d.bucket * 1.5)) pen = false;
-    if (p[1] == null) continue;
+    const gap = last == null ? 0 : p[0] - last;
+    if (p[1] == null || gap > Math.max(d.bucket, spacing) * 1.5) pen = false;   // a missing round, not coarser data
+    if (last != null) spacing = gap;
+    if (p[1] == null) { last = p[0]; continue; }
     const x = X(p[0]) + bw / 2, y = Y(p[1]);
     pen ? g.lineTo(x, y) : g.moveTo(x, y); pen = true; last = p[0];
   }
   g.stroke();
 
   // loss strip: height = loss, colour = severity
-  for (const p of pts) if (p[2] > 0) {
-    const h = Math.max(2, p[2] / 100 * L.lh);
+  pts.forEach((p, i) => { if (p[2] > 0) {
+    const h = Math.max(2, p[2] / 100 * L.lh), w = widths[i];
     g.fillStyle = p[2] >= d.loss_crit ? C["--critical"] : C["--warning"];
-    g.fillRect(X(p[0]), ly1 - h, Math.max(1, bw > 3 ? bw - 1 : bw), h);
-  }
+    g.fillRect(X(p[0]), ly1 - h, Math.max(1, w > 3 ? w - 1 : w), h);
+  } });
 
   // route strip: tinted segment + solid top edge + letter (identity never by colour alone)
   g.textAlign = "center";
@@ -742,9 +757,12 @@ const STATE = {
   unknown: [`<span class="badge same">${t("unknown")}</span>`],
 };
 
-function ipCell(h) {
+function ipCell(h, after = "") {
   if (!h) return '<span class="muted">—</span>';
-  return h.ip ? `<span class="ipc mono">${esc(h.ip)}</span>` : `<span class="ipc mono silent" title="${t("silentTip")}">???</span>`;
+  if (!h.ip) return `<span class="ipc mono silent" title="${t("silentTip")}">???</span>`;
+  const name = h.asn ? (S.trace?.asn_names || {})[h.asn] : null;
+  const as = h.asn ? `<span class="asn" title="${esc(name || h.asn)}">${esc(h.asn)}${name ? " · " + esc(asName(name)) : ""}</span>` : "";
+  return `<span class="ipc mono">${esc(h.ip)}</span>${after}${as}`;
 }
 
 function lossCell(h, origin) {
@@ -775,7 +793,10 @@ function renderTrace() {
   const dDest = dc && dp && dc.ip === dp.ip ? dc.avg - dp.avg : null;   // only when both reached the same last hop
   const tail = cur.hops[cur.hops.length - 1];
   const stuck = tail && !tail.ip && dc ? t("stuck", dc.ttl, esc(dc.ip)) : "";
-  const parts = [nc && t("hopsChanged", nc), na && t("nNew", na), nr && t("nGone", nr), nu && t("nSilent", nu)].filter(Boolean);
+  const asPath = hops => [...new Set(hops.map(h => h.asn).filter(Boolean))].join(" ");
+  const asMoved = prev && asPath(prev.hops) && asPath(cur.hops) && asPath(prev.hops) !== asPath(cur.hops);
+  const parts = [nc && t("hopsChanged", nc), na && t("nNew", na), nr && t("nGone", nr), nu && t("nSilent", nu),
+    asMoved && t("asChanged")].filter(Boolean);
   const sum = !prev ? t("noPrev")
     : (parts.length ? parts.join(" · ") : t("sameHops"))
       + (dDest != null ? ` · ${t("dest")} ${dDest >= 0 ? "+" : "−"}${ms(Math.abs(dDest))}${NB}ms` : "");
@@ -787,7 +808,7 @@ function renderTrace() {
     const dTxt = dv == null ? "—" : `${dv >= 0 ? "+" : "−"}${ms(Math.abs(dv))}`;
     return `<tr class="r-${r.state || "none"}">
       <td class="num">${r.ttl}</td>
-      ${prev ? `<td>${ipCell(p)}${p?.avg != null ? ` <span class="muted">${msU(prevAvg.get(r.ttl))}</span>` : ""}</td>` : ""}
+      ${prev ? `<td>${ipCell(p, p?.avg != null ? ` <span class="muted">${msU(prevAvg.get(r.ttl))}</span>` : "")}</td>` : ""}
       <td>${ipCell(c)}</td>
       <td class="num">${lossCell(c, cur.origin)}</td>
       <td class="num">${c?.avg != null ? `<span class="barw"><span class="bar" style="width:${Math.max(2, c.avg / maxAvg * 100)}%"></span></span>${msU(c.avg)}` : '<span class="muted">—</span>'}</td>
@@ -898,6 +919,7 @@ $("#banner span").textContent = t("offline");
 $("#banner button").textContent = t("retry");
 $("#lang").textContent = t("langBtn");
 $("#lang").title = t("langTitle");
+$("#out").textContent = t("signOut");
 route();
 refresh();
 setInterval(refresh, 60000);
