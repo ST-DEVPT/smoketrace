@@ -2,7 +2,7 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
-## [Unreleased]
+## [0.4.2] - 2026-10-19
 
 - **Traceroutes for many targets**: the number of mtr running at once grows with the targets (8 up to 64) so
   every trace of a round fits in the step; with 8, 555 targets took about 15 minutes a round and nothing was
