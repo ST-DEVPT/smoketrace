@@ -1,8 +1,11 @@
 # Security
 
-smoketrace has no login. Anyone who can reach its port sees your targets, their addresses, the routes to them
-and their history. The dashboard and its API only read; the only thing that writes is an agent's push, and
-that needs the agent's token.
+Without `PASSWORD`, anyone who can reach its port sees your targets, their addresses, the routes to them and
+their history. With it, the dashboard and its API need a sign-in: a session cookie signed with the password
+(HMAC-SHA256), HttpOnly, SameSite=Strict, Secure behind an HTTPS proxy that sets `X-Forwarded-Proto`, valid for 30
+days; changing the password ends every session, and a wrong password costs a second. `/metrics` then needs
+`METRICS_TOKEN`. The dashboard and its API only read; the only thing that writes is an agent's round, and that
+needs the agent's token.
 
 - The image listens on every interface (`BIND=0.0.0.0`); outside Docker it listens on `127.0.0.1` unless told
   otherwise. Keep it on a trusted network, or put it behind a reverse proxy with authentication.

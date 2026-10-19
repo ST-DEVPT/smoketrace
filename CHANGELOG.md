@@ -2,6 +2,31 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.4.0] - 2026-10-19
+
+- **Alerts** on Discord, ntfy or any webhook, when a target's status or its route changes and holds for two
+  rounds, when it recovers, and when an agent stops or starts sending rounds. Each alert says what you would look
+  up first: the median and loss, the hop where real loss starts (with its AS), where the traceroute stops, the
+  AS path before and after, what the other sites see, and a link to the target (`PUBLIC_URL`).
+- **TCP and DNS probes**: `tcp://host:port` times a TCP connection (for hosts that drop ICMP) and traces over
+  that port; `dns://server/name` times a DNS server's answer and traces over TCP 53. SmokePing's `TCPPing`
+  (`port`) and `DNS` (`lookup`) targets are now probed too.
+- **AS and operator of every hop** (mtr `-z`, names from Team Cymru, looked up once and kept), in the traceroute
+  table, an "AS path changed" note and the alerts. `ASN=0` turns it off.
+- **Prometheus**: `/metrics` with median, loss, jitter, status, route changes and the last round, per target and
+  source (`METRICS_TOKEN`); `docs/grafana.json` is a dashboard to import.
+- **Sign-in**: `PASSWORD` protects the dashboard and its API with a signed, HttpOnly session cookie.
+- **Agents the server pulls from**: `LISTEN` on the agent and `name=token@http://agent:8100` in `AGENTS` (or
+  `url =` under a SmokePing slave), for sites the server can reach but that cannot reach the server.
+  Rounds are dropped from the agent only once the server has acknowledged them.
+- **SmokePing's history**: `--import-rrd` copies up to 30 days from SmokePing's RRD files (master and slaves).
+- **Per-target limits**: `loss_warn`, `loss_crit` and `latency_warn` in SmokePing's config, inherited down the
+  tree; `LOSS_WARN` and `LOSS_CRIT` for the defaults.
+- **SmokePing's config from another container**: `SMOKEPING_CONFIG` may be a folder (a `config` file, or the split
+  files of Debian and linuxserver/smokeping); absolute paths such as `@include /config/target/dns.conf` are found
+  in the mounted folder; an include that cannot be found is logged and skipped instead of stopping the start.
+- Imported hourly history draws as a continuous line; the image runs Python 3.14.
+
 ## [0.3.0] - 2026-10-19
 
 - **Reads SmokePing's config**: point `SMOKEPING_CONFIG` at it and smoketrace takes the targets from
