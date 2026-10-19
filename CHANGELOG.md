@@ -2,7 +2,7 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
-## [Unreleased]
+## [0.4.1] - 2026-10-19
 
 - **Many targets**: fping's timeout grows with the number of ICMP targets (at `-i10` every packet waits 10 ms,
   so 640 hosts at 20 pings need over two minutes) and stays below the step; before, any config past ~300 hosts
