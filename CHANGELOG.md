@@ -2,6 +2,22 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.3.0] - 2026-10-19
+
+- **Reads SmokePing's config**: point `SMOKEPING_CONFIG` at it and smoketrace takes the targets from
+  `*** Targets ***` (the `+`/`++` tree becomes the groups, `menu` or `title` the names), follows `@include`,
+  inherits `probe`, `slaves` and `nomasterpoll` the way SmokePing does, and uses `step` and `pings` from
+  `*** Database ***`. Targets on a probe other than FPing (DNS, Curl, TCPPing…) and multi-host graphs are listed
+  in the log and left out.
+- **SmokePing's slaves are the agents**: the names in `*** Slaves ***` with their secrets from the `secrets` file.
+  Start an agent with the slave's secret as its `TOKEN`; it probes only the targets whose `slaves` name it, with
+  the primary's step and pings. `nomasterpoll = yes` leaves a target to the agents. `AGENTS` still works and
+  wins over the secrets file.
+- **Config changes without a restart**: the primary re-reads its config (every included file and the secrets)
+  when one changes, before the next round, and the agents follow on their next round. A broken edit is logged
+  and the last good config stays.
+- The overview lists, for each source, only the targets it probes.
+
 ## [0.2.0] - 2026-10-19
 
 - **Docker**: a multi-arch image (`ghcr.io/st-devpt/smoketrace`, amd64 and arm64) and a compose file. The

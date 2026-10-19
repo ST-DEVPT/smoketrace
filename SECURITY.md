@@ -8,7 +8,8 @@ that needs the agent's token.
   otherwise. Keep it on a trusted network, or put it behind a reverse proxy with authentication.
 - The container runs with one capability, `NET_RAW` (what fping and mtr need for ICMP), a read-only root and
   no-new-privileges. The systemd unit runs it as a dynamic, unprivileged user with the same single capability.
-- **Agents** authenticate with a token of at least 16 characters, compared in constant time. Every pushed
+- **Agents** authenticate with a token, compared in constant time: at least 16 characters in `AGENTS`; secrets
+  taken from SmokePing's secrets file are accepted as they are, with a warning in the log when shorter. Every pushed
   round is rebuilt from known fields only: targets the server has, numbers in range, hop addresses that are IP
   addresses. The token travels with every round, so over the internet put the server behind HTTPS or a VPN.
 - Targets come only from `targets.ini`, and a host that could be read as a command-line option is refused.

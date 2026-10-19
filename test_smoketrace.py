@@ -82,7 +82,8 @@ def test_load_targets_rejects_option_like_host():
         ok.write_text("[Internet]\nCloudflare DNS = 1.1.1.1  # comentário\n", encoding="utf-8")
         bad.write_text("[x]\nevil = -f/etc/passwd\n", encoding="utf-8")
         assert st.load_targets(ok) == [{"id": "internet-cloudflare-dns", "group": "Internet",
-                                        "name": "Cloudflare DNS", "host": "1.1.1.1"}]
+                                        "name": "Cloudflare DNS", "host": "1.1.1.1",
+                                        "slaves": None, "master": True}]
         try:
             st.load_targets(bad)
         except SystemExit:
@@ -152,6 +153,133 @@ def test_clean_round():
         raise AssertionError(f"accepted {b!r}")
 
 
+SMOKEPING_MAIN = """\
+*** General ***
+owner = Someone
+@include config.d/Probes
+@include config.d/Targets
+
+*** Slaves ***
+secrets = smokeping_secrets
++porto
+display_name = Porto
++Lisbon
++office
+
+*** Database ***
+step = 300
+pings = 10
+"""
+SMOKEPING_PROBES = """\
+*** Probes ***
++ FPing
+binary = /usr/bin/fping
+++ FPingFast
+pings = 5
++ DNS
+binary = /usr/bin/dig
+"""
+SMOKEPING_TARGETS = """\
+*** Targets ***
+probe = FPing
+menu = Top
+title = Network
+
++ Internet
+menu = Internet
+title = The internet
+
+++ Cloudflare
+menu = Cloudflare DNS
+host = 1.1.1.1
+
+++ Fast
+probe = FPingFast
+host = 8.8.8.8
+
+++ Resolver
+probe = DNS
+host = 9.9.9.9
+
+++ Both
+host = /Internet/Cloudflare /Internet/Fast
+
++ Remote
+slaves = porto
+# a comment
+++ VPS
+title = VPS in Frankfurt
+host = 203.0.113.10
+nomasterpoll = yes
+
++++ Deep
+slaves = porto office
+host = 203.0.113.11
+"""
+
+
+def smokeping_dir(d):
+    (Path(d) / "config.d").mkdir()
+    Path(d, "config").write_text(SMOKEPING_MAIN, encoding="utf-8")
+    Path(d, "config.d", "Probes").write_text(SMOKEPING_PROBES, encoding="utf-8")
+    Path(d, "config.d", "Targets").write_text(SMOKEPING_TARGETS, encoding="utf-8")
+    Path(d, "smokeping_secrets").write_text("porto:short\noffice:a-long-enough-office-secret\n", encoding="utf-8")
+    return Path(d, "config")
+
+
+def args(**kw):
+    import argparse
+    base = dict(smokeping=None, targets=Path("nowhere.ini"), agents="", name="home")
+    return argparse.Namespace(**{**base, **kw})
+
+
+def test_smokeping_config():
+    with tempfile.TemporaryDirectory() as d:
+        cfg = st.load_config(args(smokeping=smokeping_dir(d)))
+        t = {x["id"]: x for x in cfg["targets"]}
+        assert list(t) == ["internet-cloudflare", "internet-fast", "remote-vps", "remote-vps-deep"], list(t)  # no DNS, no multi-host
+        assert (t["internet-cloudflare"]["group"], t["internet-cloudflare"]["name"]) == ("Internet", "Cloudflare DNS")
+        assert t["internet-cloudflare"]["slaves"] == [] and t["internet-cloudflare"]["master"]
+        assert t["internet-fast"]["host"] == "8.8.8.8"                       # FPingFast is an FPing
+        assert t["remote-vps"]["name"] == "VPS in Frankfurt" and not t["remote-vps"]["master"]
+        assert t["remote-vps"]["slaves"] == ["porto"]
+        assert t["remote-vps-deep"]["group"] == "Remote / VPS in Frankfurt"
+        assert t["remote-vps-deep"]["slaves"] == ["porto", "office"] and not t["remote-vps-deep"]["master"]  # inherited
+        assert cfg["agents"] == {"porto": "short", "office": "a-long-enough-office-secret"}   # Lisbon: no secret, bad name
+        assert (cfg["step"], cfg["pings"]) == (300, 10)
+        assert len(cfg["files"]) == 4                                         # config, Probes, Targets, secrets
+        cfg = st.load_config(args(smokeping=smokeping_dir(d + "/x") if False else Path(d, "config"),
+                                  agents="porto=0123456789abcdefXYZ"))
+        assert cfg["agents"]["porto"] == "0123456789abcdefXYZ"                # AGENTS wins over the secrets file
+        sources = ["home", "porto", "office"]
+        assert st.probers(t["internet-cloudflare"], sources) == ["home"]
+        assert st.probers(t["remote-vps"], sources) == ["porto"]
+        assert st.probers(t["remote-vps-deep"], sources) == ["porto", "office"]
+        assert st.probers({"id": "x"}, sources) == sources                   # targets.ini: everyone probes everything
+
+
+def test_bare_targets_file_and_reload():
+    import os
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d, "Targets")
+        f.write_text("probe = FPing\n+ LAN\n++ Router\nhost = 192.168.1.1\n", encoding="utf-8")
+        a = args(smokeping=f)
+        st.apply_config(a, st.load_config(a))
+        assert [t["id"] for t in st.Handler.targets] == ["lan-router"] and st.Handler.sources == ["home"]
+        f.write_text("+ LAN\n++ Router\nhost = 192.168.1.1\n++ NAS\nhost = 192.168.1.20\n", encoding="utf-8")
+        os.utime(f, (1000, 1000))                                              # a different mtime, whatever the clock
+        st.maybe_reload(a)
+        assert [t["id"] for t in st.Handler.targets] == ["lan-router", "lan-nas"]
+        f.write_text("+ LAN\n++ Router\nhost = -oops\n++ Bad\nhost = /x\n", encoding="utf-8")
+        os.utime(f, (2000, 2000))
+        st.maybe_reload(a)                                                    # bad hosts are skipped, not fatal
+        assert [t["id"] for t in st.Handler.targets] == []
+        Path(d, "Targets").write_text("*** Database ***\nstep = 5\n", encoding="utf-8")
+        os.utime(f, (3000, 3000))
+        st.maybe_reload(a)                                                    # invalid: the last good config stays
+        assert st.STEP == 300
+
+
 def test_parse_agents():
     assert st.parse_agents("porto=0123456789abcdef, lisbon=fedcba9876543210", "local") == {
         "porto": "0123456789abcdef", "lisbon": "fedcba9876543210"}
@@ -172,7 +300,8 @@ def test_agent_push_end_to_end():
         db = Path(d, "s.db")
         st.init_db(db, "local")
         st.Handler.db, st.Handler.sources = db, ["local", "porto"]
-        st.Handler.targets = [{"id": "t", "group": "g", "name": "T", "host": "10.0.0.9"}]
+        st.Handler.targets = [{"id": "t", "group": "g", "name": "T", "host": "10.0.0.9"},
+                              {"id": "u", "group": "g", "name": "U", "host": "10.0.0.8", "slaves": ["office"]}]
         st.Handler.agents = {"porto": "0123456789abcdef"}
         srv = st.ThreadingHTTPServer(("127.0.0.1", 0), st.Handler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -185,7 +314,8 @@ def test_agent_push_end_to_end():
                 return json.load(r)
 
         try:
-            assert call("/api/agent/targets")["targets"] == [{"id": "t", "host": "10.0.0.9"}]
+            got = call("/api/agent/targets")
+            assert got["targets"] == [{"id": "t", "host": "10.0.0.9"}] and got["pings"] == st.PINGS   # not office's "u"
             now = int(__import__("time").time())
             call("/api/agent/push", {"ts": now, "pings": {"t": [5.0] * 20},
                                      "traces": {"t": [{"ttl": 1, "ip": "10.0.0.9", "loss": 0, "avg": 5.0}]}})
@@ -194,6 +324,7 @@ def test_agent_push_end_to_end():
             assert [s["name"] for s in ov["sources"]] == ["local", "porto"]
             for path, body, token in (("/api/agent/targets", None, "wrong-token-xxxxxx"),
                                       ("/api/agent/push", {"ts": now, "pings": {"x": [1.0]}}, "0123456789abcdef"),
+                                      ("/api/agent/push", {"ts": now, "pings": {"u": [1.0]}}, "0123456789abcdef"),
                                       ("/api/overview?src=nowhere", None, "")):
                 try:
                     call(path, body, token)

@@ -83,8 +83,9 @@ jobs:
           EOF
 
   container:
-    # the image as shipped: a server and a remote agent, each with only NET_RAW, a read-only root and
-    # no-new-privileges, probing loopback for real; the agent's rounds must reach the server
+    # the image as shipped, configured from a SmokePing config: a server and a remote agent (a SmokePing slave with
+    # its secret), each with only NET_RAW, a read-only root and no-new-privileges, probing loopback for real;
+    # the agent takes its targets and its pings from the server and its rounds must reach it
     needs: [test, demo, probes]
     runs-on: ubuntu-latest
     steps:
@@ -93,23 +94,41 @@ jobs:
       - name: Start a server and an agent
         run: |
           # root-owned like the one compose creates: root in the container has no CAP_DAC_OVERRIDE
-          sudo mkdir data && printf '[LAN]\nLoopback = 127.0.0.1\n' | sudo tee data/targets.ini
+          sudo mkdir -p data/smokeping
+          sudo tee data/smokeping/config <<'EOF'
+          *** Slaves ***
+          secrets = secrets
+          +edge
+
+          *** Database ***
+          step = 300
+          pings = 10
+
+          *** Targets ***
+          probe = FPing
+          + LAN
+          slaves = edge
+          ++ Loopback
+          host = 127.0.0.1
+          EOF
+          echo 'edge:edge-secret-0123456789' | sudo tee data/smokeping/secrets > /dev/null
           hard="--network host --read-only --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true"
-          docker run -d --name server $hard -v "$PWD/data:/data" -e NAME=ci -e AGENTS=edge=0123456789abcdef0123 smoketrace:test
+          docker run -d --name server $hard -v "$PWD/data:/data" -e NAME=ci -e SMOKEPING_CONFIG=/data/smokeping/config smoketrace:test
           for i in $(seq 30); do curl -fs 127.0.0.1:8099/livez && break; sleep 1; done
-          docker run -d --name agent $hard -e SERVER=http://127.0.0.1:8099 -e TOKEN=0123456789abcdef0123 smoketrace:test
-      - name: Both sources see loopback
+          docker run -d --name agent $hard -e SERVER=http://127.0.0.1:8099 -e TOKEN=edge-secret-0123456789 smoketrace:test
+      - name: Both sources see loopback, with the config's pings
         run: |
           for i in $(seq 90); do
-            curl -fs "127.0.0.1:8099/api/overview?src=edge" > ov.json && python3 - <<'EOF' && exit 0
+            curl -fs "127.0.0.1:8099/api/overview?src=edge" > ov.json && curl -fs "127.0.0.1:8099/api/target?id=lan-loopback&src=edge&range=3600" > edge.json && python3 - <<'EOF' && exit 0
           import json, sys
-          ov = json.load(open("ov.json"))
-          t = ov["targets"][0]
-          sys.exit(0 if t["by_source"] == {"ci": "ok", "edge": "ok"} and t["median"] is not None else 1)
+          t = json.load(open("ov.json"))["targets"][0]
+          edge = json.load(open("edge.json"))
+          ok = t["by_source"] == {"ci": "ok", "edge": "ok"} and t["median"] is not None
+          sys.exit(0 if ok and edge["pings"] == 10 and len(edge["points"][-1][4]) == 10 else 1)
           EOF
             sleep 2
           done
-          cat ov.json; exit 1
+          cat ov.json edge.json; exit 1
       - name: Docker reports the server healthy
         run: |
           for i in $(seq 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' server)" = healthy ] && exit 0; sleep 2; done

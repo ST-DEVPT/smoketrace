@@ -6,7 +6,8 @@
                                                           remote agent: probes from here, pushes to the server
   python3 smoketrace.py --demo                            synthetic data, any OS, no probes
 
-Every flag also reads an environment variable (TARGETS, DB, BIND, PORT, NAME, AGENTS, SERVER, TOKEN, DEMO).
+Every flag also reads an environment variable (TARGETS, SMOKEPING_CONFIG, DB, BIND, PORT, NAME, AGENTS, SERVER,
+TOKEN, DEMO). With SMOKEPING_CONFIG, targets, slaves, step and pings come from SmokePing's own config.
 """
 import argparse
 import bisect
@@ -34,8 +35,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).resolve().parent
-STEP = 300                  # seconds per round (SmokePing default)
-PINGS = 20                  # pings per round (SmokePing default)
+STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
+PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
 MTR_CYCLES = 10
 RETENTION_DAYS = 30         # ponytail: raw rows, no RRD consolidation; ~1 KB per trace, fine for tens of targets
 LOSS_WARN, LOSS_CRIT = 5, 20            # % lost in the last round (1 of 20 pings = 5 %)
@@ -75,8 +76,159 @@ def load_targets(path):
             if tid in seen:
                 raise SystemExit(f"{path}: duplicate target: {group}/{name}")
             seen.add(tid)
-            targets.append({"id": tid, "group": group, "name": name, "host": host})
+            # slaves None: every agent probes it; master: the server's own probe does too
+            targets.append({"id": tid, "group": group, "name": name, "host": host, "slaves": None, "master": True})
     return targets
+
+
+# ---------- SmokePing's config ----------
+
+SECTION_RE = re.compile(r"\*\*\*\s*(\w+)\s*\*\*\*")
+NODE_RE = re.compile(r"(\++)\s*(\S+)")
+ICMP_PROBES = {"FPing", "FPing6"}
+INHERITED = ("probe", "slaves", "nomasterpoll")
+
+
+def read_smokeping(path, files, depth=0):
+    """The config's lines with every @include expanded; `files` collects each file read (for reloads)."""
+    if depth > 10:
+        raise SystemExit(f"{path}: @include nested too deep")
+    path = Path(path)
+    files.append(path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        raise SystemExit(f"cannot read {path}: {e}")
+    lines = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("@include"):
+            inc = Path(s[len("@include"):].strip())
+            lines += read_smokeping(inc if inc.is_absolute() else path.parent / inc, files, depth + 1)
+        else:
+            lines.append(s)
+    return lines
+
+
+def parse_smokeping(lines):
+    """-> {section: (attributes before the first node, [(level, name, attributes)])}.
+    A file with no *** Section *** header is a bare Targets file."""
+    secs, cur = {}, None
+    for s in lines:
+        if not s or s.startswith("#"):
+            continue
+        m = SECTION_RE.fullmatch(s)
+        if m:
+            cur = secs.setdefault(m.group(1), ({}, []))
+            continue
+        if cur is None:
+            cur = secs.setdefault("Targets", ({}, []))
+        m = NODE_RE.fullmatch(s)
+        if m:
+            cur[1].append((len(m.group(1)), m.group(2), {}))
+            continue
+        key, sep, value = s.partition("=")
+        if sep:
+            (cur[1][-1][2] if cur[1] else cur[0])[key.strip()] = value.strip()
+    return secs
+
+
+def smokeping_targets(secs):
+    """Targets with a host and an ICMP probe; groups from the + / ++ tree; probe, slaves and nomasterpoll inherited."""
+    probe_type = {}
+    for level, name, _ in secs.get("Probes", ({}, []))[1]:
+        if level == 1:
+            parent = name
+        probe_type[name] = parent if level > 1 else name   # ++FPingFast under +FPing is an FPing
+    root, nodes = secs.get("Targets", ({}, []))
+    stack = [(0, [], [], {"probe": "FPing", **{k: root[k] for k in INHERITED if k in root}})]
+    targets, skipped, seen = [], [], set()
+    for level, name, attrs in nodes:
+        while stack[-1][0] >= level:
+            stack.pop()
+        _, path, labels, inherit = stack[-1]
+        path, labels = path + [name], labels + [attrs.get("menu") or attrs.get("title") or name]
+        inherit = {**inherit, **{k: attrs[k] for k in INHERITED if k in attrs}}
+        stack.append((level, path, labels, inherit))
+        host = attrs.get("host")
+        if not host:
+            continue
+        where = "/" + "/".join(path)
+        if host.startswith("/"):
+            skipped.append(f"{where} (multi-host graph)")
+            continue
+        if probe_type.get(inherit["probe"], inherit["probe"]) not in ICMP_PROBES:
+            skipped.append(f"{where} (probe {inherit['probe']})")
+            continue
+        tid = slug("-".join(path))
+        if not HOST_RE.fullmatch(host) or tid in seen:
+            skipped.append(f"{where} (host {host!r})" if tid not in seen else f"{where} (duplicate)")
+            continue
+        seen.add(tid)
+        targets.append({"id": tid, "group": " / ".join(labels[:-1]) or "Targets", "name": labels[-1], "host": host,
+                        "slaves": inherit.get("slaves", "").split(),
+                        "master": inherit.get("nomasterpoll", "no").lower() not in ("yes", "true", "1")})
+    if skipped:
+        log(f"not probed (only ICMP probes are supported): {', '.join(skipped)}")
+    return targets
+
+
+def smokeping_agents(secs, base, files):
+    """*** Slaves *** names with their secrets from the `secrets` file (name:secret per line)."""
+    root, nodes = secs.get("Slaves", ({}, []))
+    names = [n for level, n, _ in nodes if level == 1]
+    if not names:
+        return {}
+    path = Path(root.get("secrets", ""))
+    path = path if path.is_absolute() else base / path
+    files.append(path)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as e:
+        log(f"cannot read the slaves' secrets ({e}): set AGENTS instead")
+        return {}
+    secrets = dict(line.strip().split(":", 1) for line in lines if ":" in line and not line.lstrip().startswith("#"))
+    agents = {}
+    for n in names:
+        if not NAME_RE.fullmatch(n):
+            log(f"slave {n!r} ignored: agent names are lowercase letters, digits and -")
+        elif not secrets.get(n, "").strip():
+            log(f"slave {n!r} ignored: no secret for it in {path}")
+        else:
+            agents[n] = secrets[n].strip()
+            if len(agents[n]) < 16:
+                log(f"slave {n!r}: its secret is short ({len(agents[n])} characters); a longer one is safer")
+    return agents
+
+
+def load_config(a):
+    """-> {targets, agents, step, pings, files}, from SmokePing's config or targets.ini, plus AGENTS."""
+    files, step, pings, agents = [], DEFAULT_STEP, DEFAULT_PINGS, {}
+    if a.smokeping:
+        secs = parse_smokeping(read_smokeping(a.smokeping, files))
+        targets = smokeping_targets(secs)
+        agents = smokeping_agents(secs, Path(a.smokeping).parent, files)
+        db = secs.get("Database", ({}, []))[0]
+        try:
+            step = int(db.get("step", DEFAULT_STEP))
+            pings = int(db.get("pings", DEFAULT_PINGS))
+        except ValueError:
+            raise SystemExit("*** Database ***: step and pings must be whole numbers")
+        if not (60 <= step <= 3600 and 1 <= pings <= 100):
+            raise SystemExit("*** Database ***: step must be 60-3600 s and pings 1-100")
+    else:
+        if not a.targets.exists() and (HERE / "targets.ini").exists():
+            shutil.copy(HERE / "targets.ini", a.targets)
+            log(f"wrote an example targets file to {a.targets}: put your targets in it")
+        targets = load_targets(a.targets)
+        files.append(a.targets)
+    agents.update(parse_agents(a.agents, a.name))      # AGENTS adds to (or overrides) SmokePing's slaves
+    agents.pop(a.name, None)
+    return {"targets": targets, "agents": agents, "step": step, "pings": pings, "files": files}
+
+
+def stamp(files):
+    return tuple(f.stat().st_mtime_ns if f.exists() else None for f in files)
 
 
 def parse_agents(spec, local):
@@ -380,8 +532,11 @@ def every_round(fn):
         time.sleep(max(1.0, ts + STEP - time.time()))
 
 
-def collector(path, source, targets, ping_fn, trace_fn):
-    every_round(lambda ts: store(path, *round_rows(source, ts, *probe_round(targets, ts, ping_fn, trace_fn)), ts))
+def collector(path, source, targets_fn, ping_fn, trace_fn, before=lambda: None):
+    def one(ts):
+        before()
+        store(path, *round_rows(source, ts, *probe_round(targets_fn(), ts, ping_fn, trace_fn)), ts)
+    every_round(one)
 
 
 # ---------- remote agent ----------
@@ -399,8 +554,10 @@ def run_agent(server, token, ping_fn, trace_fn):
 
     def one(ts):
         nonlocal targets
+        global STEP, PINGS
         try:
-            targets = call("/api/agent/targets")["targets"]
+            got = call("/api/agent/targets")
+            targets, STEP, PINGS = got["targets"], int(got["step"]), int(got["pings"])   # the primary decides
         except Exception as e:
             log(f"cannot fetch targets from {server}: {e}" + (" (using the last list)" if targets else ""))
         if targets:
@@ -440,13 +597,22 @@ def summary(db, src, t, now, full=True):
     return out
 
 
+def probers(t, sources):
+    """The sources that probe a target: the server's own (unless nomasterpoll), then the agents it lists."""
+    return ([sources[0]] if t.get("master", True) else []) + [
+        s for s in sources[1:] if t.get("slaves") is None or s in t["slaves"]]
+
+
 def overview(db, sources, src, targets, now):
     last = dict(db.execute("SELECT source, MAX(ts) FROM ping GROUP BY source"))
     rows = []
     for t in targets:
+        who = probers(t, sources)
+        if src not in who:
+            continue
         row = summary(db, src, t, now)
         if len(sources) > 1:
-            row["by_source"] = {s: summary(db, s, t, now, full=False)["status"] for s in sources}
+            row["by_source"] = {s: summary(db, s, t, now, full=False)["status"] for s in who}
         rows.append(row)
     return {"now": now, "step": STEP, "source": src, "targets": rows,
             "sources": [{"name": s, "last_ts": last.get(s)} for s in sources]}
@@ -512,9 +678,11 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/livez":
                 return self.send(200, b"ok", "text/plain")
             if u.path == "/api/agent/targets":
-                if not self.agent():
+                name = self.agent()
+                if not name:
                     return self.send(401, b'{"error":"bad token"}', "application/json")
-                return self.json({"step": STEP, "targets": [{"id": t["id"], "host": t["host"]} for t in self.targets]})
+                return self.json({"step": STEP, "pings": PINGS,
+                                  "targets": [{"id": t["id"], "host": t["host"]} for t in self.mine(name)]})
             src = q.get("src") or self.sources[0]
             if src not in self.sources:
                 raise ValueError(src)
@@ -543,12 +711,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(413, b'{"error":"too large"}', "application/json")
         now = int(time.time())
         try:
-            ts, pings, traces = clean_round(json.loads(self.rfile.read(size)), {t["id"] for t in self.targets}, now)
+            ts, pings, traces = clean_round(json.loads(self.rfile.read(size)), {t["id"] for t in self.mine(name)}, now)
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             log(f"rejected a round from {name}: {e}")
             return self.send(400, b'{"error":"bad round"}', "application/json")
         store(self.db, *round_rows(name, ts, pings, traces), now)
         self.json({"ok": True})
+
+    def mine(self, name):
+        return [t for t in self.targets if name in probers(t, self.sources)]
 
     def agent(self):
         """The agent whose token this request carries, or None."""
@@ -671,6 +842,8 @@ def main():
     env = os.environ.get
     ap = argparse.ArgumentParser(description="SmokePing-style latency + mtr traceroutes")
     ap.add_argument("--targets", type=Path, default=Path(env("TARGETS", HERE / "targets.ini")))
+    ap.add_argument("--smokeping", type=Path, default=env("SMOKEPING_CONFIG"),
+                    help="read targets, slaves (as agents), step and pings from SmokePing's config instead")
     ap.add_argument("--db", type=Path, default=env("DB"))
     ap.add_argument("--bind", default=env("BIND", "127.0.0.1"))
     ap.add_argument("--port", type=int, default=int(env("PORT", "8099")))
@@ -692,9 +865,9 @@ def main():
 
     if not NAME_RE.fullmatch(a.name):
         raise SystemExit(f"--name {a.name!r}: lowercase letters, digits and -")
-    agents = parse_agents(a.agents, a.name)
     if a.demo:
-        targets = [{"id": slug(f"{g}-{n}"), "group": g, "name": n, "host": h} for g, n, h, _ in DEMO_TARGETS]
+        targets = [{"id": slug(f"{g}-{n}"), "group": g, "name": n, "host": h, "slaves": None, "master": True}
+                   for g, n, h, _ in DEMO_TARGETS]
         db = a.db or HERE / "demo.db"
         for suffix in ("", "-wal", "-shm"):
             Path(f"{db}{suffix}").unlink(missing_ok=True)
@@ -703,21 +876,43 @@ def main():
         probes = {a.name: demo_probes(t0), DEMO_AGENT: demo_probes(t0, remote=True)}
         for name, (ping_fn, trace_fn) in probes.items():
             seed_demo(db, name, targets, ping_fn, trace_fn, t0)
-            threading.Thread(target=collector, args=(db, name, targets, ping_fn, trace_fn), daemon=True).start()
-        sources = list(probes)
+            threading.Thread(target=collector, args=(db, name, lambda: targets, ping_fn, trace_fn), daemon=True).start()
+        Handler.db, Handler.targets, Handler.sources, Handler.agents = db, targets, list(probes), {}
     else:
-        if not a.targets.exists() and (HERE / "targets.ini").exists():
-            shutil.copy(HERE / "targets.ini", a.targets)
-            log(f"wrote an example targets file to {a.targets}: put your targets in it and restart")
-        targets = load_targets(a.targets)
         db = a.db or HERE / "smoketrace.db"
         init_db(db, a.name)
-        threading.Thread(target=collector, args=(db, a.name, targets, fping, mtr), daemon=True).start()
-        sources = [a.name, *agents]
+        apply_config(a, load_config(a))
+        reload = lambda: maybe_reload(a)
+        master = lambda: [t for t in Handler.targets if t["master"]]
+        threading.Thread(target=collector, args=(db, a.name, master, fping, mtr, reload), daemon=True).start()
+        Handler.db = db
 
-    Handler.db, Handler.targets, Handler.sources, Handler.agents = db, targets, sources, agents
-    log(f"smoketrace: {len(targets)} targets, sources {', '.join(sources)}, http://{a.bind}:{a.port}")
+    log(f"smoketrace: {len(Handler.targets)} targets, sources {', '.join(Handler.sources)}, http://{a.bind}:{a.port}")
     ThreadingHTTPServer((a.bind, a.port), Handler).serve_forever()
+
+
+CONFIG = {"stamp": None, "files": []}
+
+
+def apply_config(a, cfg):
+    global STEP, PINGS
+    STEP, PINGS = cfg["step"], cfg["pings"]
+    Handler.targets, Handler.agents, Handler.sources = cfg["targets"], cfg["agents"], [a.name, *cfg["agents"]]
+    CONFIG.update(files=cfg["files"], stamp=stamp(cfg["files"]))
+
+
+def maybe_reload(a):
+    """Re-read the config when any file it came from changed; a broken edit keeps the last good config."""
+    if stamp(CONFIG["files"]) == CONFIG["stamp"]:
+        return
+    try:
+        cfg = load_config(a)
+    except SystemExit as e:
+        CONFIG["stamp"] = stamp(CONFIG["files"])     # do not retry the same broken edit every round
+        log(f"config not reloaded, keeping the last one: {e}")
+        return
+    apply_config(a, cfg)
+    log(f"config reloaded: {len(cfg['targets'])} targets, agents {', '.join(cfg['agents']) or 'none'}")
 
 
 if __name__ == "__main__":

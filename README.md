@@ -22,6 +22,7 @@
 
 <p align="center">
   <a href="#quick-start"><b>Quick start</b></a> ·
+  <a href="#moving-from-smokeping">From SmokePing</a> ·
   <a href="#remote-agents">Remote agents</a> ·
   <a href="#reading-the-screen">Reading the screen</a> ·
   <a href="#how-it-works">How it works</a> ·
@@ -134,13 +135,43 @@ sudo cp /opt/smoketrace/smoketrace.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now smoketrace
 ```
 
+## Moving from SmokePing
+
+smoketrace reads SmokePing's config as it is: no conversion, and you keep editing the same files. Mount it and
+point `SMOKEPING_CONFIG` at it in `docker-compose.yml`:
+
+```yaml
+    volumes:
+      - ./data:/data
+      - /etc/smokeping:/etc/smokeping:ro
+    environment:
+      SMOKEPING_CONFIG: /etc/smokeping/config
+```
+
+| SmokePing | smoketrace |
+| --- | --- |
+| `*** Targets ***`, the `+` / `++` / `+++` tree | the targets; the tree becomes the groups, `menu` (or `title`) the names |
+| `@include` | followed, relative to the including file |
+| `probe = FPing`, `FPing6` and their subprobes | probed; other probes (DNS, Curl, TCPPing…) and multi-host graphs are listed in the log and left out |
+| `*** Slaves ***` and its `secrets` file | the agents: a slave's name, with its secret as the agent's `TOKEN` |
+| `slaves = porto office` | which agents probe the target (inherited, like in SmokePing) |
+| `nomasterpoll = yes` | the primary leaves the target to its agents |
+| `step`, `pings` in `*** Database ***` | the round length and the pings per round, for the primary and every agent |
+| `*** Alerts ***`, `*** Presentation ***`, the RRD files | not used; history starts with smoketrace |
+
+The primary re-reads the config (every included file and the secrets) when one of them changes, before its next
+round; the agents get the new list on theirs. A broken edit is logged and the last good config stays. Once
+smoketrace has the history you want, stop SmokePing and its slaves.
+
 ## Remote agents
 
-An agent is the same image started with a server address and a token. It fetches the targets from the server,
+An agent is the same image started with a server address and a token. It never reads a config of its own: it
+fetches its targets, the round length and the pings from the server (the primary),
 probes them from where it runs, and pushes every round. It needs no port and no storage: only an outgoing
 connection to the server. If the server is unreachable, it keeps up to a day of rounds and sends them later.
 
-**1. On the server**, give each agent a name and a long random token (`openssl rand -hex 24`) in
+**1. On the server**, list the agents: with a SmokePing config they are its slaves and their secrets (see
+above); otherwise give each agent a name and a long random token (`openssl rand -hex 24`) in
 `docker-compose.yml`, then `docker compose up -d`:
 
 ```yaml
@@ -181,11 +212,12 @@ Every option is an environment variable and a flag:
 | Variable | Flag | Default | |
 | --- | --- | --- | --- |
 | `TARGETS` | `--targets` | `/data/targets.ini` in the image | the file above |
+| `SMOKEPING_CONFIG` | `--smokeping` | none | read [SmokePing's config](#moving-from-smokeping) instead |
 | `DB` | `--db` | `/data/smoketrace.db` in the image | the SQLite database |
 | `BIND` | `--bind` | `0.0.0.0` in the image, else `127.0.0.1` | address to listen on |
 | `PORT` | `--port` | `8099` | |
 | `NAME` | `--name` | `local` | what the dashboard calls the server's own probe |
-| `AGENTS` | `--agents` | none | agents allowed to push: `name=token,name=token` |
+| `AGENTS` | `--agents` | none | agents allowed to push: `name=token,name=token` (added to SmokePing's slaves) |
 | `SERVER` | `--agent` | none | run as an agent pushing to this server |
 | `TOKEN` | `--token` | none | the agent's token |
 | `DEMO` | `--demo` | off | `1`: synthetic data, no probes |
