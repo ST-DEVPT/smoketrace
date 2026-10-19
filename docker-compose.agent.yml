@@ -1,5 +1,5 @@
-# A remote agent: probes the server's targets from where it runs and pushes every round to the server.
-# Nothing to store and no port to open: it only makes outgoing connections.
+# A remote agent: probes the server's targets from where it runs. It reads no config of its own: the server
+# gives it its targets, the round length and the pings.
 #   docker compose -f docker-compose.agent.yml up -d
 services:
   smoketrace-agent:
@@ -9,8 +9,12 @@ services:
     network_mode: host
     environment:
       TZ: Europe/Lisbon
+      TOKEN: paste-this-agent-s-token       # the token after its name in the server's AGENTS (or its SmokePing secret)
+      # Either it pushes to the server (outgoing connections only)...
       SERVER: http://smoketrace.lan:8099    # over the internet: put the server behind HTTPS or a VPN
-      TOKEN: paste-this-agent-s-token       # the token after its name in the server's AGENTS
+      # ...or the server pulls from it (when it cannot reach the server): remove SERVER, open 8100 to the server
+      # only, and give the server `name=token@http://this-host:8100` in AGENTS
+      # LISTEN: 0.0.0.0:8100
     logging:
       options: {max-size: 10m, max-file: "3"}
     read_only: true

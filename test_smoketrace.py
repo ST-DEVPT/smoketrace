@@ -101,7 +101,7 @@ def test_hosts_and_mtr_commands():
     assert st.mtr_command(target("a", "1.1.1.1")) == ["mtr", "--json", "-n", "-c", "10", "-z", "1.1.1.1"]
     assert st.mtr_command(target("b", "h", probe="tcp", port=443))[-4:] == ["-T", "-P", "443", "h"]
     cmd = st.mtr_command(target("c", "9.9.9.9", probe="dns", lookup="example.org"))
-    assert cmd[-4:] == ["-u", "-P", "53", "9.9.9.9"]
+    assert cmd[-4:] == ["-T", "-P", "53", "9.9.9.9"]
 
 
 def test_route_segments():

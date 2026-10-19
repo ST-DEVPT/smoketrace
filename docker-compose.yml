@@ -1,5 +1,5 @@
-# The server: probes from this machine, stores everything, serves the dashboard on port 8099.
-# First start writes an example data/targets.ini: put your targets in it and `docker compose restart`.
+# The server: probes from this machine, stores everything, alerts, serves the dashboard on port 8099.
+# First start writes an example data/targets.ini: put your targets in it (picked up before the next round).
 services:
   smoketrace:
     image: ghcr.io/st-devpt/smoketrace:latest
@@ -8,14 +8,21 @@ services:
     network_mode: host            # traceroutes start at your real gateway, not at Docker's bridge
     volumes:
       - ./data:/data              # targets.ini and the database
-      # Coming from SmokePing? Read its config as it is (targets, slaves as agents, step and pings):
-      # - /etc/smokeping:/etc/smokeping:ro         # or SmokePing's container folder: /DATA/smokeping/config:/etc/smokeping:ro
+      # Coming from SmokePing? Read its config as it is (targets, probes, slaves as agents, step and pings):
+      # - /etc/smokeping:/etc/smokeping:ro     # SmokePing in a container: its folder, e.g. /DATA/smokeping/config
     environment:
       TZ: Europe/Lisbon
       NAME: home                  # what the dashboard calls this probe
+      PASSWORD: change-me         # sign-in for the dashboard; remove the line to have none
       # SMOKEPING_CONFIG: /etc/smokeping
-      # Remote agents allowed to push, each with its own long random token (openssl rand -hex 24):
-      # AGENTS: porto=paste-a-long-random-token,office=paste-another-one
+      # Remote agents, each with its own long random token (openssl rand -hex 24); @address = the server pulls:
+      # AGENTS: porto=paste-a-long-random-token,office=paste-another-one@http://office.lan:8100
+      # Alerts (any of them) and the address their links point to:
+      # DISCORD_WEBHOOK: https://discord.com/api/webhooks/...
+      # NTFY_URL: https://ntfy.sh/your-topic
+      # WEBHOOK_URL: https://example.com/hook
+      # PUBLIC_URL: https://smoketrace.example.com
+      # METRICS_TOKEN: another-long-random-token   # Prometheus sends it as a bearer token
       # PORT: 8099
     logging:
       options: {max-size: 10m, max-file: "3"}

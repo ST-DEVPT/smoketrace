@@ -16,7 +16,7 @@ COPY smoketrace.py index.html targets.ini ./
 ENV DB=/data/smoketrace.db TARGETS=/data/targets.ini BIND=0.0.0.0 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 VOLUME /data
 EXPOSE 8099
-# an agent (SERVER set) serves nothing, so only the server is asked
+# a push agent (SERVER) serves nothing; a pull agent (LISTEN=host:port) answers on its own port
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD [ -n "$SERVER" ] || wget -qO- "http://127.0.0.1:${PORT:-8099}/livez" || exit 1
+  CMD [ -n "$SERVER" ] || wget -qO- "http://127.0.0.1:${LISTEN:+${LISTEN##*:}}${LISTEN:-${PORT:-8099}}/livez" >/dev/null || exit 1
 CMD ["python", "smoketrace.py"]

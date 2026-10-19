@@ -115,7 +115,8 @@ docker compose up -d
 
 The first start writes an example `data/targets.ini`. Put your targets in it (the folder belongs to root, as
 the container does: use `sudo`), and it is picked up before the next round, no restart needed. Open
-`http://<docker-host>:8099`; the first round lands within five minutes. To update:
+`http://<docker-host>:8099` and sign in with the `PASSWORD` from the compose file (change it first); the first
+round lands within five minutes. To update:
 `docker compose pull && docker compose up -d`.
 
 The compose file uses the host's network, so traceroutes start at your real gateway and not at Docker's
@@ -164,7 +165,7 @@ Resolver = dns://9.9.9.9/example.org       # how fast this DNS server answers th
 | --- | --- | --- |
 | a host or address | `fping -C 20`, SmokePing's own flags | `mtr` over ICMP |
 | `tcp://host:port` | the time to open a TCP connection, once a second, like SmokePing's TCPPing | `mtr -T` to that port |
-| `dns://server/name` | the time to an answer from that server, once a second, like SmokePing's DNS probe | `mtr -u` to port 53 |
+| `dns://server/name` | the time to an answer from that server, once a second, like SmokePing's DNS probe | `mtr -T` to port 53 (a DNS server answers TCP; UDP probes would end in silence) |
 
 Edits are picked up before the next round. With SmokePing's config instead, see below.
 

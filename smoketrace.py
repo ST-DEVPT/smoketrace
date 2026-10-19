@@ -473,7 +473,9 @@ def mtr_command(t):
     if t["probe"] == "tcp":
         cmd += ["-T", "-P", str(t["port"])]  # the same port the latency is measured on
     elif t["probe"] == "dns":
-        cmd += ["-u", "-P", "53"]           # UDP to port 53, the path a DNS query takes
+        # TCP to port 53: a UDP probe gets no answer from a DNS server (the port is open, the payload is not
+        # a query), so the trace would end in silence; every DNS server must answer on TCP 53 too (RFC 7766)
+        cmd += ["-T", "-P", "53"]
     return cmd + [t["host"]]
 
 
