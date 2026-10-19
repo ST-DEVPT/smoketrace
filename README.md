@@ -61,7 +61,7 @@ real loss starts, and which "loss" is only a router saying no to ICMP.
 
 ## At a glance
 
-<p align="center"><img alt="A target's page: a latency step at 06:00, the loss under it, and route B in the route strip" src="docs/detail.jpg"></p>
+<p align="center"><img alt="A target's page: a latency step, the loss under it, and route B in the route strip" src="docs/detail.jpg"></p>
 
 <table>
   <tr>
@@ -214,7 +214,7 @@ The chart is three bands on one time axis:
 Click any moment (or <kbd>←</kbd> <kbd>→</kbd> and <kbd>Enter</kbd>) for its traceroute, against the
 **previous route** (the default) or the **previous round**:
 
-<p align="center"><img alt="Quad9 in its hour of loss: 20 % on hop 2 tagged rate-limit, 20 % from hop 5 to the end tagged real loss" src="docs/loss.jpg"></p>
+<p align="center"><img alt="Quad9 in its hour of loss: loss on hop 2 tagged rate-limit, loss from hop 5 to the end tagged real loss" src="docs/loss.jpg"></p>
 
 - **rate-limit**: loss on a hop that does not carry on to the destination. That router answers ICMP slowly or
   not at all; the packets going through it are fine.
