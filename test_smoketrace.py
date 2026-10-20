@@ -664,6 +664,49 @@ def test_alerts():
                 s.server_close()
 
 
+# ---------- the dashboard ----------
+
+def test_board_minis_compare_and_gzip():
+    import gzip
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d, "b.db")
+        st.init_db(db, "local")
+        t0 = int(time.time())
+        targets = [st.make_target(st.slug(f"{g}-{n}"), g, n, **st.parse_host(h)) for g, n, h, _ in st.DEMO_TARGETS
+                   if g in ("Services", "Sites / Braga", "Sites / Lisbon")]
+        for name, remote in (("local", False), ("porto", True)):
+            ping, trace = st.demo_probes(t0, remote)
+            st.seed_demo(db, name, targets, ping, trace, t0, days=1)
+        with st.db_open(db) as c:
+            b = st.board(c, ["local", "porto"], "local", targets, 86400, t0)
+        assert b["cells"] == len(b["targets"][0]["sev"]) == len(b["targets"][0]["med"]) >= 96
+        by = {x["id"]: x for x in b["targets"]}
+        assert by["services-vps-frankfurt"]["status"] == "down" and "3" in by["services-vps-frankfurt"]["sev"][-4:]
+        assert by["sites-braga-braga-01"]["status"] in ("warn", "crit")
+        braga = next(c for c in b["clusters"] if c["hop"]["ip"].startswith("100.70."))
+        assert len(braga["targets"]) == 9 and braga["hop"]["why"] == "loss"      # one hop behind nine problems
+        assert b["local"] is None                                              # porto sees the VPS down too
+        assert any(e["kind"] == "status" and e["target"] == "services-vps-frankfurt" and e["to"] == "down" for e in b["events"])
+        assert by["sites-braga-braga-01"]["by_source"]["porto"] == "ok"        # porto reaches Braga another way
+        st.Handler.db, st.Handler.targets, st.Handler.sources, st.Handler.agents = db, targets, ["local", "porto"], {}
+        srv, url = serve(st.Handler)
+        try:
+            req = urllib.request.Request(url + "/api/board?range=21600", headers={"Accept-Encoding": "gzip"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                assert r.headers["Content-Encoding"] == "gzip"
+                assert json.loads(gzip.decompress(r.read()))["cells"] in (72, 73)
+            minis = call(url + "/api/minis?range=86400&ids=sites-braga-braga-01,nope")
+            assert list(minis) == ["sites-braga-braga-01"] and 60 <= len(minis["sites-braga-braga-01"]) <= 80
+            cmp = call(url + "/api/compare?id=sites-braga-braga-01&range=86400")
+            assert [s["name"] for s in cmp["sources"]] == ["local", "porto"]
+            with urllib.request.urlopen(url + "/fonts/archivo.woff2", timeout=5) as r:
+                assert r.headers["Content-Type"] == "font/woff2" and "immutable" in r.headers["Cache-Control"]
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            st.BOARD_CACHE.clear()
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

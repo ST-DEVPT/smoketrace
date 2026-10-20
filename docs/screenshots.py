@@ -22,10 +22,18 @@ JPEG = {"type": "jpeg", "quality": 88}
 RANGES = {"3 h": 10800, "24 h": 86400, "7 d": 604800, "30 d": 2592000}
 
 
-def new_page(browser, **kw):
+def new_page(browser, theme="dark", view="heat", **kw):
     page = browser.new_page(**kw)
-    page.add_init_script("localStorage.setItem('lang', 'en')")   # the README is in English
+    # the README is in English; the theme and the dashboard's view are the viewer's choices, set here
+    page.add_init_script(f"localStorage.setItem('lang', 'en'); localStorage.setItem('theme', '{theme}');"
+                         f"localStorage.setItem('view', '{view}'); localStorage.setItem('brange', '86400')")
     return page
+
+
+def dashboard(page, hash_="#/"):
+    page.goto(f"{URL}/{hash_}")
+    page.wait_for_function("S.b && document.querySelector('#mainp')")
+    page.wait_for_timeout(900)          # the cards' small charts
 
 
 def open_target(page, tid, range_label=None):
@@ -56,12 +64,19 @@ def click_loss(page):
     page.wait_for_function("S.trace && S.trace.cur && S.trace.cur.origin != null")
 
 
+def section(page, locator, path, right=24):
+    """A part of the page with a little of the page around it: the sections have no side padding of their own."""
+    box, top = locator.bounding_box(), page.evaluate("scrollY")     # the box is on screen, the clip on the page
+    page.screenshot(path=path, full_page=True, clip={"x": box["x"] - 24, "y": box["y"] + top, "width": box["width"] + 24 + right,
+                                                     "height": box["height"]}, **JPEG)
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         server = subprocess.Popen([sys.executable, str(ROOT / "smoketrace.py"), "--demo", "--port", str(PORT),
                                    "--db", str(Path(tmp, "demo.db"))])
         try:
-            for _ in range(60):
+            for _ in range(120):
                 try:
                     urllib.request.urlopen(URL + "/api/overview", timeout=2)
                     break
@@ -78,37 +93,40 @@ def shoot():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(executable_path=os.environ.get("CHROMIUM") or None)
 
-        for scheme, name in (("dark", "overview.jpg"), ("light", "overview-light.jpg")):
-            page = new_page(browser, viewport={"width": 1440, "height": 900}, color_scheme=scheme)
-            page.goto(URL + "/#/")
-            page.wait_for_selector("table.targets")
-            page.wait_for_timeout(300)
-            box = page.locator(".tablewrap").bounding_box()
-            page.screenshot(path=DOCS / name, clip={"x": 0, "y": 0, "width": 1440, "height": box["y"] + box["height"] + 24},
-                            **JPEG)
+        for theme, name in (("dark", "overview.jpg"), ("light", "overview-light.jpg")):
+            page = new_page(browser, theme, viewport={"width": 1600, "height": 1000})
+            dashboard(page)
+            page.screenshot(path=DOCS / name, **JPEG)
             page.close()
+        page = new_page(browser, view="cards", viewport={"width": 1600, "height": 1000})
+        dashboard(page, "#/?st=down,crit,warn")
+        page.screenshot(path=DOCS / "cards.jpg", **JPEG)
+        page.close()
+        page = new_page(browser, view="table", viewport={"width": 1600, "height": 1000})
+        dashboard(page, "#/?g=Sites")
+        page.screenshot(path=DOCS / "table.jpg", **JPEG)
+        page.close()
 
-        page = new_page(browser, viewport={"width": 1440, "height": 1010}, color_scheme="dark")
+        page = new_page(browser, viewport={"width": 1600, "height": 1000})
         open_target(page, "internet-cloudflare-dns")
         click_route(page, "B")
         page.mouse.move(10, 10)
-        page.wait_for_timeout(200)
-        page.screenshot(path=DOCS / "detail.jpg", **JPEG)
-        page.locator("#trace").screenshot(path=DOCS / "trace.jpg", **JPEG)
+        page.wait_for_timeout(400)
+        page.screenshot(path=DOCS / "detail.jpg", full_page=True, **JPEG)
+        section(page, page.locator("#trace"), DOCS / "trace.jpg", right=0)
 
         open_target(page, "internet-quad9")
         click_loss(page)
-        page.locator("#trace").screenshot(path=DOCS / "loss.jpg", **JPEG)
+        section(page, page.locator("#trace"), DOCS / "loss.jpg", right=0)
 
         open_target(page, "internet-google-dns", "3 h")
         box = page.locator("#chart").bounding_box()
         page.mouse.move(box["x"] + box["width"] * 0.56, box["y"] + 120)
         page.wait_for_timeout(200)
-        page.locator("#chart").locator("xpath=ancestor::section[1]").screenshot(path=DOCS / "flap.jpg", **JPEG)
+        section(page, page.locator("#chart").locator("xpath=ancestor::section[1]"), DOCS / "flap.jpg")
         page.close()
 
-        page = new_page(browser, viewport={"width": 390, "height": 844}, device_scale_factor=2,
-                                is_mobile=True, has_touch=True, color_scheme="dark")
+        page = new_page(browser, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
         open_target(page, "internet-cloudflare-dns")
         page.screenshot(path=DOCS / "phone.jpg", **JPEG)
         page.close()

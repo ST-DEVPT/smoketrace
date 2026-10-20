@@ -34,7 +34,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="docs/overview-light.jpg">
-    <img alt="The overview: every target with its status, latency, jitter, loss, the last 24 hours, its route changes and how each site sees it" src="docs/overview.jpg">
+    <img alt="The dashboard: groups on the left, the KPIs, filters, a heatmap of every target over the last 24 hours, and on the right what needs attention, starting with nine targets that lose packets at the same backbone hop" src="docs/overview.jpg">
   </picture>
 </p>
 
@@ -64,7 +64,41 @@ something changes for good, it tells you, with that reading in the message.
 
 ## At a glance
 
-<p align="center"><img alt="A target's page: a latency step, the loss under it, and route B in the route strip" src="docs/detail.jpg"></p>
+Built for hundreds of targets, not a handful: the **dashboard** is organised by your groups and answers "what is
+wrong, since when, and is it one cause or many" before you click anything.
+
+- **Groups on the left**, as a tree with counts and a status bar per group (SmokePing's `+` / `++` tree, or the
+  `[Group]` sections of `targets.ini`, `/` nesting them). Click one and everything on the page is about it.
+- **KPIs** for what is in view: how many are OK, down, degraded, the median latency with its trend, the worst
+  loss, route changes, and which vantage points are reporting. Each is a filter: click *Down* to see only those.
+- **Filters** that stack and live in the address bar, so a view can be shared: status, probe (ICMP, TCP, DNS),
+  "route changed", a search over names, groups and addresses (<kbd>/</kbd>), sorting by severity, latency, loss,
+  jitter, how far above usual, or route changes.
+- **Three views of the same list**:
+  - a **heatmap**, one row per target and one cell per 5 min to 2 h, coloured by status, by latency against the
+    target's usual, or by loss; route changes marked on top; whole groups fold into one summary row; hover any
+    cell for its numbers and click it for that moment's traceroute;
+  - a **table** you can sort, with a history strip per target;
+  - **cards** with a small chart each, for the targets that need you.
+- **Needs attention**: every problem with how long it has lasted, its loss and latency against usual, the hop
+  where loss starts (with its operator) or where the trace stops, and what the other sites see. When several
+  targets point at the **same hop**, it says so first: one cause is likelier than many. When most problems are
+  seen from one site only, it says to look near that site.
+- **A timeline** of status changes, route changes and agents that went quiet, day by day, each a link to that
+  moment.
+
+<table>
+  <tr>
+    <td valign="top" width="50%"><img alt="Cards for the targets that are not OK, each with a small latency chart" src="docs/cards.jpg"></td>
+    <td valign="top" width="50%"><img alt="The table view of the Sites group, sorted by severity, with a history strip per target" src="docs/table.jpg"></td>
+  </tr>
+</table>
+
+Each **target** has its own page: the latency and its smoke, loss and route on one time axis, the other sites'
+medians over it (*Compare sites*), the traceroute of any moment against the previous route, the latency hop by
+hop, and the target's own events.
+
+<p align="center"><img alt="A target's page: a latency step, the loss under it, route B in the route strip, the traceroute against route A, the latency by hop and the events" src="docs/detail.jpg"></p>
 
 <table>
   <tr>
@@ -78,15 +112,10 @@ something changes for good, it tells you, with that reading in the message.
   </tr>
 </table>
 
-- **Every target on one screen**: status by shape and label (OK, warning, critical, down, no data), median,
-  jitter, loss, a 24-hour sparkline on a shared time axis, the route changes and how each site sees it.
-  Grouped, worst first, filtered by a click on a status, searched with <kbd>/</kbd>.
+And underneath:
+
 - **SmokePing's smoke**: the 20 pings of every round drawn as nested bands around the median, so the spread
   and the outliers show, not only an average.
-- **Route and latency on one time axis**: a route strip under the chart, and a line at every change, in the
-  new route's colour, through latency and loss.
-- **Click any moment** for that round's traceroute, against the previous route or the previous round, hop by
-  hop: changed, new, gone, silent, how much slower, and the AS and operator of each hop.
 - **Reads mtr for you**: loss that stops at one hop is rate-limiting; loss that starts at a hop and reaches the
   destination is real, and is marked where it starts.
 - **ICMP, TCP and DNS**: ping like fping, time a TCP connection to a port (for hosts that drop ICMP), or time a
@@ -287,7 +316,7 @@ An alert carries what you would look up first:
 > AS path: AS64496 › AS64497 › AS64499 → AS64496 › AS64498 › AS64499
 
 Route alerts can be turned off with `ALERT_ROUTES=0` (useful where ECMP makes routes take turns). Status limits
-are 5 % and 20 % loss by default (`LOSS_WARN`, `LOSS_CRIT`), plus a warning when the median runs well above its
+are 10 % and 20 % loss by default (`LOSS_WARN`, `LOSS_CRIT`: two and four of the 20 pings), plus a warning when the median runs well above its
 24-hour baseline; with SmokePing's config, `loss_warn`, `loss_crit` and `latency_warn` set them per target.
 
 ## Prometheus and Grafana
@@ -370,13 +399,16 @@ flowchart LR
 - **Every source is kept apart.** The server's own probe and each agent have their own rows, routes and route
   letters; an agent's round is checked field by field before it is stored, and an agent checks every target it
   is given before it reaches a probe.
-- **Status** comes from the last round: down at 100 % loss, critical from 20 %, warning from 5 % or when the
+- **Status** comes from the last round: down at 100 % loss, critical from 20 %, warning from 10 % or when the
   median runs well above its 24-hour baseline (or over `latency_warn`), no data after three missed rounds.
 
 ### API
 
 | Endpoint | Returns |
 | --- | --- |
+| `GET /api/board?range=86400&src=…` | the dashboard in one answer: every target now and its heatmap row, the problems and the hops they share, the timeline |
+| `GET /api/minis?ids=…&range=…&src=…` | small charts for the cards on screen |
+| `GET /api/compare?id=…&range=…` | a target's median and loss from every source that probes it |
 | `GET /api/overview?src=…` | every target as one source sees it, plus each source's status for it |
 | `GET /api/target?id=…&range=86400&src=…` | points `[ts, median, loss, jitter, smoke]`, route segments, limits |
 | `GET /api/trace?id=…&ts=…&vs=route&src=…` | the traceroute at `ts` (the latest without it), the one it is compared with (`vs=route` or `round`), the hop-by-hop diff and the AS names |
@@ -398,7 +430,7 @@ Every option is an environment variable (and a flag):
 | `AGENTS` | none | `name=token` (it pushes) or `name=token@http://agent:8100` (the server pulls), comma-separated; added to SmokePing's slaves |
 | `DISCORD_WEBHOOK`, `NTFY_URL`, `WEBHOOK_URL` | none | where [alerts](#alerts) go |
 | `ALERT_ROUTES` | `1` | `0`: alerts for status changes only |
-| `LOSS_WARN`, `LOSS_CRIT` | `5`, `20` | loss limits in % (per target with SmokePing's config) |
+| `LOSS_WARN`, `LOSS_CRIT` | `10`, `20` | loss limits in % (per target with SmokePing's config) |
 | `METRICS_TOKEN` | none | bearer token for `/metrics` |
 | `ASN` | `1` | `0`: no AS lookups |
 | `DB` | `/data/smoketrace.db` in the image | the SQLite database |

@@ -1,11 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#1a1a19"/>
+  <rect width="64" height="64" rx="14" fill="#171716"/>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M8 36c7.5 0 7.5-18 15-18s7.5 24 15 24 7.5-30 18-30" stroke="#c3c2b7" stroke-width="14" opacity=".12"/>
-    <path d="M8 36c7.5 0 7.5-18 15-18s7.5 24 15 24 7.5-30 18-30" stroke="#c3c2b7" stroke-width="7" opacity=".2"/>
-    <path d="M8 36c7.5 0 7.5-18 15-18s7.5 24 15 24 7.5-30 18-30" stroke="#f0efec" stroke-width="3.2"/>
+    <path d="M8 36c7.5 0 7.5-18 15-18s7.5 24 15 24 7.5-30 18-30" stroke="#ebe9e4" stroke-width="12" opacity=".08"/>
+    <path d="M8 36c7.5 0 7.5-18 15-18s7.5 24 15 24 7.5-30 18-30" stroke="#ff6a33" stroke-width="3.4"/>
   </g>
-  <rect x="8" y="50" width="17" height="5" rx="2.5" fill="#3987e5"/>
-  <rect x="27" y="50" width="11" height="5" rx="2.5" fill="#d95926"/>
-  <rect x="40" y="50" width="16" height="5" rx="2.5" fill="#3987e5"/>
+  <rect x="8" y="50" width="17" height="4" fill="#6eb0cf"/>
+  <rect x="27" y="50" width="11" height="4" fill="#b69ae0"/>
+  <rect x="40" y="50" width="16" height="4" fill="#6eb0cf"/>
 </svg>

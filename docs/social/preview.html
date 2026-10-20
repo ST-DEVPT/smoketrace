@@ -4,31 +4,30 @@
 <head>
 <meta charset="utf-8">
 <style>
+  @font-face { font-family: "Archivo"; src: url(../../fonts/archivo.woff2) format("woff2"); font-weight: 100 900; font-stretch: 62% 125%; }
+  @font-face { font-family: "Plex Mono"; src: url(../../fonts/plex-mono-400.woff2) format("woff2"); font-weight: 400; }
   html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; }
-  body { position: relative; background: radial-gradient(120% 90% at 0% 0%, #1d2530 0%, #0d0d0d 55%); color: #f0efec;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-  .text { position: absolute; left: 72px; top: 92px; width: 520px; }
+  body { position: relative; background: #111110; color: #ebe9e4; font-family: "Archivo", sans-serif; -webkit-font-smoothing: antialiased; }
+  .text { position: absolute; left: 72px; top: 96px; width: 520px; }
   .brand { display: flex; align-items: center; gap: 20px; }
-  .brand img { width: 84px; height: 84px; }
-  h1 { margin: 0; font-size: 76px; font-weight: 700; letter-spacing: -.03em; }
-  h1 span { color: #c3c2b7; font-weight: 500; }
-  p { margin: 34px 0 0; font-size: 34px; line-height: 1.22; font-weight: 600; letter-spacing: -.01em; }
-  p em { font-style: normal; color: #6fb1ff; }
-  .sub { margin-top: 26px; font: 500 21px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; color: #c3c2b7; }
-  .shot { position: absolute; left: 650px; top: 64px; width: 700px; height: 600px; border-radius: 14px; overflow: hidden;
-    box-shadow: 0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.12); }
+  .brand img { width: 76px; height: 76px; }
+  h1 { margin: 0; font-size: 84px; font-weight: 450; font-stretch: 78%; letter-spacing: -.02em; }
+  p { margin: 40px 0 0; font-size: 36px; line-height: 1.18; font-weight: 450; font-stretch: 85%; }
+  p em { font-style: normal; color: #ff6a33; }
+  .sub { margin-top: 28px; font: 20px/1.6 "Plex Mono", monospace; color: #8f8c84; }
+  .shot { position: absolute; left: 650px; top: 64px; width: 700px; height: 600px; border-radius: 10px; overflow: hidden; border: 1px solid #3a3834; }
   .shot img { display: block; width: 1152px; margin: -40px 0 0 -470px; }   /* the route change, not the quiet start */
-  .strip { position: absolute; left: 0; right: 0; bottom: 0; height: 10px; display: flex; gap: 6px; }
+  .strip { position: absolute; left: 0; right: 0; bottom: 0; height: 8px; display: flex; gap: 4px; }
   .strip i { height: 100%; }
 </style>
 </head>
 <body>
   <div class="text">
-    <div class="brand"><img src="../icon.svg" alt=""><h1>smoke<span>trace</span></h1></div>
+    <div class="brand"><img src="../icon.svg" alt=""><h1>smoketrace</h1></div>
     <p>SmokePing, with <em>the route</em> behind every spike.</p>
     <div class="sub">fping + mtr every 5 min<br>one Python file · no dependencies</div>
   </div>
   <div class="shot"><img src="../detail.jpg" alt=""></div>
-  <div class="strip"><i style="flex:5;background:#3987e5"></i><i style="flex:2;background:#d95926"></i><i style="flex:4;background:#3987e5"></i><i style="flex:1;background:#199e70"></i></div>
+  <div class="strip"><i style="flex:5;background:#6eb0cf"></i><i style="flex:2;background:#b69ae0"></i><i style="flex:4;background:#6eb0cf"></i><i style="flex:1;background:#5fbf9f"></i></div>
 </body>
 </html>

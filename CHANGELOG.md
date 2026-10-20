@@ -2,6 +2,30 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.5.0] - 2026-10-20
+
+- **A dashboard for many targets.** The overview is organised by your groups (SmokePing's tree or the sections of
+  `targets.ini`), shown as a tree on the left with counts; picking a group scopes the whole page to it.
+- **Readouts** for what is in view: how many are OK, down and degraded, the median latency with its trend, the
+  worst loss and the route changes. Down, degraded, worst loss and route changes are filters.
+- **Filters that stack**: status, probe, "route changed" and a search over names, groups and addresses (`/`),
+  with sorting by severity, latency, loss, jitter, how far above usual, or route changes. They live in the URL,
+  so a filtered view can be shared or bookmarked.
+- **Three views of the same list**: a heatmap (one row per target, coloured by status, latency against the
+  target's usual, or loss; groups fold into one row; hover for the numbers, click for that moment's traceroute),
+  a sortable table with a history strip, and cards with a small chart each.
+- **Needs attention**: every problem with how long it has lasted, the hop where loss starts or where the trace
+  stops, and what the other sites see. Targets that lose packets at the same hop are grouped first ("one cause
+  is likelier than many"), and problems seen from one site only point at that site.
+- **A timeline** of status changes, route changes and agents going quiet; each entry opens that moment.
+- Each target's page adds its own events and, with several sites, their medians on the same chart
+  (*Compare sites*).
+- A new look, shared with rack-fan-control: warm greys, Archivo and IBM Plex Mono (bundled, no outside
+  requests), dark and light following the system; the sign-in page matches.
+- `/api/board`, `/api/minis` and `/api/compare` serve the dashboard; answers over 1.4 KB are gzip-compressed.
+- `LOSS_WARN` defaults to 10 % (two of 20 pings) instead of 5 %, so a single lost ping no longer warns.
+- The demo has a fleet of 55 targets across sites and clouds, with a shared-hop outage to find.
+
 ## [0.4.2] - 2026-10-19
 
 - **Traceroutes for many targets**: the number of mtr running at once grows with the targets (8 up to 64) so

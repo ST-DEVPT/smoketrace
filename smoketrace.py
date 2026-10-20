@@ -13,6 +13,7 @@
 Every flag also reads an environment variable; README.md lists them.
 """
 import argparse
+import gzip
 import base64
 import bisect
 import configparser
@@ -48,7 +49,7 @@ STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
 MTR_CYCLES = 10
 RETENTION_DAYS = 30         # ponytail: raw rows, no RRD consolidation; ~1 KB per trace, fine for tens of targets
-LOSS_WARN, LOSS_CRIT = 5.0, 20.0        # % lost in the last round (1 of 20 pings = 5 %); per target in SmokePing's config
+LOSS_WARN, LOSS_CRIT = 10.0, 20.0       # % lost in the last round: 2 of 20 pings warn, 4 are critical; per target too
 LAT_FACTOR, LAT_MARGIN = 1.5, 10.0      # warn when median > 24 h baseline * 1.5 + 10 ms
 MAX_POINTS = 600            # chart points per request; longer ranges are bucketed
 RANGES = (3 * 3600, 86400, 7 * 86400, RETENTION_DAYS * 86400)
@@ -835,6 +836,8 @@ def every_round(fn):
             fn(ts)
         except Exception as e:
             log(f"round {ts} failed: {e}")
+        if time.time() - ts > STEP:
+            log(f"round {ts} took {time.time() - ts:.0f} s, longer than the {STEP} s step")
         time.sleep(max(1.0, ts + STEP - time.time()))
 
 
@@ -1030,7 +1033,8 @@ def target_detail(db, src, t, rng, now):
     segs, known = route_segments(load_traces(db, src, t["id"]))   # whole history: route letters stay stable
     vis = [{**s, "label": label(s["route"]), "hops": len(known[s["route"]]), "change": k > 0 and s["from"] >= since}
            for k, s in enumerate(segs) if s["end"] > since]
-    return {"target": summary(db, src, t, now, full=False), "source": src, "from": since, "to": now,
+    events = target_events(db, src, t, since, now)[:100]
+    return {"target": summary(db, src, t, now, full=False), "source": src, "from": since, "to": now, "events": events,
             "bucket": bucket, "points": bucketize(rows, bucket), "segments": vis, "step": STEP,
             "loss_warn": threshold(t, "loss_warn", LOSS_WARN), "loss_crit": threshold(t, "loss_crit", LOSS_CRIT),
             "pings": PINGS}
@@ -1065,6 +1069,183 @@ def trace_detail(db, src, tid, ts, vs):
     names = dict(db.execute(f"SELECT asn, name FROM asn WHERE asn IN ({','.join('?' * len(asns))})", asns)) if asns else {}
     return {"cur": cur, "prev": prev, "vs": vs, "fallback": fallback, "asn_names": names,
             "rows": diff_hops(prev and prev["hops"], cur["hops"])}
+
+
+# ---------- the dashboard ----------
+
+SEVERITY = {"ok": 0, "warn": 1, "crit": 2, "down": 3}
+BOARD_BUCKET = {6 * 3600: 300, 86400: 900, 7 * 86400: 7200}      # heatmap cell per range: 72, 96, 84 cells
+BOARD_CACHE = {}
+BOARD_LOCK = threading.Lock()
+
+
+def round_status(median, loss, baseline, t):
+    return status_of(0, 0, median, loss, baseline, t)
+
+
+def status_events(rows, baseline, t):
+    """Status changes in a run of rounds, held ALERT_ROUNDS rounds like the alerts: [(ts, from, to)]."""
+    out, cur, pend, n, first = [], None, None, 0, None
+    for ts, med, loss, *_ in rows:
+        st = round_status(med, loss, baseline, t)
+        if cur is None:
+            cur = st
+        elif st == cur:
+            pend, n = None, 0
+        else:
+            if st == pend:
+                n += 1
+            else:
+                pend, n, first = st, 1, ts
+            if n >= ALERT_ROUNDS:
+                out.append((first, cur, st))
+                cur, pend, n = st, None, 0
+    return out
+
+
+def hop_info(db, hops):
+    """The hop to blame: where real loss starts, else the last that answers when the trace ends in silence."""
+    origin = loss_origin(hops)
+    answered = [h for h in hops if h["ip"]]
+    if origin is not None:
+        h, why = next(h for h in hops if h["ttl"] == origin), "loss"
+    elif hops and not hops[-1]["ip"] and answered:
+        h, why = answered[-1], "stops"
+    else:
+        return None
+    name = h.get("asn") and (db.execute("SELECT name FROM asn WHERE asn=?", (h["asn"],)).fetchone() or [None])[0]
+    return {"why": why, "ttl": h["ttl"], "ip": h["ip"], "asn": h.get("asn"), "as_name": name}
+
+
+def target_events(db, src, t, since, now, rows=None, traces=None, baseline=None):
+    """Status and route changes of one target as one source saw them, newest first."""
+    if rows is None:
+        rows = db.execute("SELECT ts, median, loss, jitter, rtts FROM ping WHERE source=? AND target=? AND ts>=? "
+                          "ORDER BY ts", (src, t["id"], since)).fetchall()
+    if traces is None:
+        traces = load_traces(db, src, t["id"], since)
+    if baseline is None:
+        meds = [r[1] for r in rows if r[1] is not None]
+        baseline = statistics.median(meds) if meds else None
+    ev = [{"ts": ts, "kind": "status", "target": t["id"], "source": src, "from": a, "to": b}
+          for ts, a, b in status_events(rows, baseline, t)]
+    segs, _ = route_segments(traces)
+    ev += [{"ts": s["from"], "kind": "route", "target": t["id"], "source": src, "from": label(segs[k - 1]["route"]),
+            "to": label(s["route"])} for k, s in enumerate(segs) if k > 0]
+    return sorted(ev, key=lambda e: -e["ts"])
+
+
+def status_now(rows, now, t):
+    """(status, last_ts, median, loss, jitter, baseline) from rows (ts, median, loss, jitter, ...) covering 24 h."""
+    day = [r for r in rows if r[0] >= now - 86400]
+    meds = [r[1] for r in day if r[1] is not None]
+    base = statistics.median(meds) if meds else None
+    last_ts, med, loss, jit = day[-1][:4] if day else (None, None, None, None)
+    return status_of(now, last_ts, med, loss, base, t), last_ts, med, loss, jit, base
+
+
+def board(db, sources, src, targets, rng, now):
+    """Everything the dashboard shows in one compact answer: per target its state now and one heatmap row
+    (severity per cell as a string, medians, worst loss, cells where the route changed), the problems and
+    the hop they share, and the timeline."""
+    width = BOARD_BUCKET.get(rng, 900)
+    start = (now - rng) // width * width
+    nb = math.ceil((now - start) / width)
+    out, events, problems, fleet = [], [], [], [[] for _ in range(nb)]
+    q = "SELECT ts, median, loss, jitter FROM ping WHERE source=? AND target=? AND ts>=? ORDER BY ts"
+    for t in targets:
+        who = probers(t, sources)
+        if src not in who:
+            continue
+        rows = db.execute(q, (src, t["id"], min(start, now - 86400))).fetchall()
+        st, last_ts, med, loss, jit, base = status_now(rows, now, t)
+        rows = [r for r in rows if r[0] >= start]
+        sev, cmed, closs = [None] * nb, [[] for _ in range(nb)], [0.0] * nb
+        for ts, m, l, _ in rows:
+            i = min(nb - 1, (ts - start) // width)
+            v = SEVERITY[round_status(m, l, base, t)]
+            sev[i] = v if sev[i] is None else max(sev[i], v)
+            closs[i] = max(closs[i], l)
+            if m is not None:
+                cmed[i].append(m)
+        traces = load_traces(db, src, t["id"], start)
+        segs, _ = route_segments(traces)
+        changes = [sg["from"] for k, sg in enumerate(segs) if k > 0]
+        meds = []
+        for i, c in enumerate(cmed):
+            v = round(statistics.median(c), 1) if c else None
+            meds.append(v)
+            if v is not None:
+                fleet[i].append(v)
+        evs = target_events(db, src, t, start, now, rows, traces, base)
+        events += evs
+        by = None
+        if len(sources) > 1:
+            by = {x: (st if x == src else status_now(db.execute(q, (x, t["id"], now - 86400)).fetchall(), now, t)[0])
+                  for x in who}
+        out.append({"id": t["id"], "name": t["name"], "group": t["group"], "host": t["host"], "probe": t["probe"],
+                    "port": t["port"], "lookup": t["lookup"], "status": st, "last_ts": last_ts, "median": med,
+                    "loss": loss, "jitter": jit, "baseline": base, "route_changes": len(changes),
+                    "last_change": changes[-1] if changes else None, "by_source": by,
+                    "sev": "".join("." if v is None else str(v) for v in sev), "med": meds,
+                    "cl": [round(v) for v in closs],
+                    "rc": sorted({min(nb - 1, (ts - start) // width) for ts in changes})})
+        if st != "ok":
+            since = next((e["ts"] for e in evs if e["kind"] == "status" and e["to"] == st), None)
+            problems.append({"id": t["id"], "status": st, "since": since,
+                             "hop": hop_info(db, traces[-1][1]) if traces and st != "stale" else None,
+                             "elsewhere": {k: v for k, v in (by or {}).items() if k != src}})
+    points = {}
+    for pr in problems:
+        if pr["hop"] and pr["hop"]["ip"]:
+            points.setdefault(pr["hop"]["ip"], []).append(pr)
+    clusters = sorted(({"hop": prs[0]["hop"], "targets": [x["id"] for x in prs]}
+                       for prs in points.values() if len(prs) > 1), key=lambda c: -len(c["targets"]))
+    local = None
+    hurt = [pr for pr in problems if pr["status"] != "stale"]
+    if len(sources) > 1 and out and len(hurt) >= 2 and len(hurt) / len(out) >= 0.5:
+        if all(pr["elsewhere"] and all(v == "ok" for v in pr["elsewhere"].values()) for pr in hurt):
+            local = src               # broken from here only: the problem is near this vantage point
+    agent_ev = []
+    for name in sources:
+        tss = [r[0] for r in db.execute("SELECT DISTINCT ts FROM ping WHERE source=? AND ts>=? ORDER BY ts",
+                                        (name, start))]
+        for a, b in zip(tss, tss[1:]):
+            if b - a > 3 * STEP:
+                agent_ev += [{"ts": a + STEP, "kind": "quiet", "source": name}, {"ts": b, "kind": "back", "source": name}]
+    last = dict(db.execute("SELECT source, MAX(ts) FROM ping GROUP BY source"))
+    events = sorted(events + agent_ev, key=lambda e: -e["ts"])[:500]
+    return {"now": now, "step": STEP, "source": src, "range": rng, "start": start, "width": width, "cells": nb,
+            "auth": bool(PASSWORD), "sources": [{"name": x, "last_ts": last.get(x)} for x in sources], "targets": out,
+            "fleet": [round(statistics.median(f), 1) if f else None for f in fleet],
+            "problems": problems, "clusters": clusters, "local": local, "events": events,
+            "loss_warn": LOSS_WARN, "loss_crit": LOSS_CRIT}
+
+
+def minis(db, src, ids, targets, rng, now):
+    """Small charts for the cards on screen: ~72 points of [ts, median, p10, p90, loss] per target."""
+    width = STEP * max(1, math.ceil(rng / 72 / STEP))
+    out = {}
+    for t in targets:
+        if t["id"] in ids:
+            rows = db.execute("SELECT ts, median, loss, jitter, rtts FROM ping WHERE source=? AND target=? AND ts>=? "
+                              "ORDER BY ts", (src, t["id"], now - rng)).fetchall()
+            out[t["id"]] = [[p[0], p[1], p[4][len(p[4]) // 10] if p[4] else None,
+                             p[4][-1 - len(p[4]) // 10] if p[4] else None, p[2]] for p in bucketize(rows, width)]
+    return out
+
+
+def compare(db, sources, t, rng, now):
+    """The target's median and loss as every source that probes it saw them, on one time axis."""
+    since = now - rng
+    bucket = STEP * max(1, math.ceil(rng / MAX_POINTS / STEP))
+    out = []
+    for src in probers(t, sources):
+        rows = db.execute("SELECT ts, median, loss, jitter, rtts FROM ping WHERE source=? AND target=? AND ts>=? "
+                          "ORDER BY ts", (src, t["id"], since)).fetchall()
+        out.append({"name": src, "points": [[p[0], p[1], p[2]] for p in bucketize(rows, bucket)]})
+    return {"from": since, "to": now, "bucket": bucket, "sources": out}
+
 
 
 def metrics(db, sources, targets, now):
@@ -1252,6 +1433,10 @@ class Alerter:
 ALERTS = Alerter()
 
 
+FONTS = {"/fonts/archivo.woff2": "archivo.woff2", "/fonts/plex-mono-400.woff2": "plex-mono-400.woff2",
+         "/fonts/plex-mono-500.woff2": "plex-mono-500.woff2"}
+
+
 # ---------- sign-in ----------
 
 def session_value(expiry):
@@ -1273,20 +1458,31 @@ def signed_in(cookie_header):
 LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>smoketrace · sign in</title>
 <style>
-:root{color-scheme:light;--page:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;--ink-2:#52514e;--border:rgba(11,11,11,.12);--focus:#2a78d6;--bad:#d03b3b}
-@media (prefers-color-scheme:dark){:root{color-scheme:dark;--page:#0d0d0d;--surface:#1a1a19;--ink:#f0efec;--ink-2:#c3c2b7;--border:rgba(255,255,255,.12);--focus:#3987e5}}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--page);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;padding:16px}
-form{width:min(340px,100%);background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 24px}
-.brand{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:650;margin-bottom:20px}.brand span{color:var(--ink-2);font-weight:450}
-label{display:block;font-size:12px;color:var(--ink-2);margin-bottom:6px}
-input{width:100%;height:38px;padding:0 12px;border:1px solid var(--border);border-radius:8px;background:var(--page);color:var(--ink);font:inherit}
-button{margin-top:14px;width:100%;height:38px;border:0;border-radius:8px;background:var(--ink);color:var(--surface);font:inherit;font-weight:600;cursor:pointer}
-:focus-visible{outline:2px solid var(--focus);outline-offset:2px}.err{color:var(--bad);font-size:13px;margin:10px 0 0}
-</style></head><body><form method="post" action="/login">
-<div class="brand"><svg width="20" height="20" viewBox="0 0 18 18" aria-hidden="true"><path d="M1 12c2.5 0 2.5-6 5-6s2.5 8 5 8 2.5-10 5-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><div>smoke<span>trace</span></div></div>
+@font-face{font-family:"Archivo";src:url(/fonts/archivo.woff2) format("woff2");font-weight:100 900;font-stretch:62% 125%}
+@font-face{font-family:"Plex Mono";src:url(/fonts/plex-mono-400.woff2) format("woff2");font-weight:400}
+:root{color-scheme:dark;--bg:#111110;--panel:#171716;--ink:#ebe9e4;--ink-2:#aaa79f;--ink-3:#8f8c84;--line-2:#3a3834;--brand:#ff6a33;--bad:#f0524a}
+:root[data-theme=light]{color-scheme:light;--bg:#f2f0eb;--panel:#faf9f6;--ink:#171717;--ink-2:#4f4d48;--ink-3:#6b6860;--line-2:#c7c2b6;--brand:#c2410c;--bad:#c0301c}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:40px 16px;background:var(--bg);color:var(--ink);
+font:14px/1.45 "Archivo","Helvetica Neue",Helvetica,sans-serif;-webkit-font-smoothing:antialiased}
+form{width:100%;max-width:360px}
+.mark{display:flex;align-items:center;gap:10px;margin-bottom:40px;font-weight:650;font-size:15px}.mark svg{color:var(--brand)}
+h1{margin:0 0 6px;font-size:34px;line-height:1.05;font-weight:450;font-stretch:78%;letter-spacing:-.01em}
+p{margin:0 0 28px;color:var(--ink-3)}
+label{display:block;margin-bottom:6px;font-size:13px;color:var(--ink-2)}
+input{width:100%;padding:11px 12px;border:1px solid var(--line-2);border-radius:7px;background:var(--panel);color:var(--ink);font:15px "Plex Mono",ui-monospace,monospace}
+input:focus{border-color:var(--ink);outline:none}
+button{width:100%;margin-top:22px;padding:11px;border:1px solid var(--ink);border-radius:7px;background:var(--ink);color:var(--bg);font:600 14px "Archivo",sans-serif;cursor:pointer}
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.err{min-height:20px;margin:12px 0 0;font-size:13px;color:var(--bad)}
+</style><script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark")}catch{}</script>
+</head><body><form method="post" action="/login">
+<div class="mark"><svg width="22" height="22" viewBox="0 0 18 18" aria-hidden="true"><path d="M1 12c2.5 0 2.5-6 5-6s2.5 8 5 8 2.5-10 5-10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>smoketrace</div>
+<h1 id="h">Sign in</h1><p id="s">Use the password set in PASSWORD.</p>
 <label for="p" id="l">Password</label><input id="p" name="password" type="password" autocomplete="current-password" autofocus required>
 <button id="b">Sign in</button>%ERROR%</form>
-<script>if((localStorage.getItem("lang")||navigator.language||"").slice(0,2)==="pt"){document.getElementById("l").textContent="Palavra-passe";document.getElementById("b").textContent="Entrar";const e=document.querySelector(".err");if(e)e.textContent="Palavra-passe errada."}</script>
+<script>if((localStorage.getItem("lang")||navigator.language||"").slice(0,2)==="pt"){const T={h:"Entrar",s:"Use a palavra-passe definida em PASSWORD.",l:"Palavra-passe",b:"Entrar"};
+for(const k in T)document.getElementById(k).textContent=T[k];const e=document.querySelector(".err");if(e)e.textContent="Palavra-passe errada."}</script>
 </body></html>"""
 
 
@@ -1306,6 +1502,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/livez":
                 return self.send(200, b"ok", "text/plain")
+            if u.path in FONTS:     # served before sign-in: the sign-in page uses them too
+                return self.send(200, (HERE / "fonts" / FONTS[u.path]).read_bytes(), "font/woff2", cache=True)
             if u.path == "/login":
                 return self.send(200, LOGIN_PAGE.replace("%ERROR%", "").encode(), "text/html; charset=utf-8")
             if u.path == "/logout":
@@ -1330,6 +1528,24 @@ class Handler(BaseHTTPRequestHandler):
             with db_open(self.db) as db:
                 if u.path == "/api/overview":
                     return self.json(overview(db, self.sources, src, self.targets, now))
+                if u.path == "/api/board":
+                    rng = int(q.get("range", 86400))
+                    rng = rng if rng in BOARD_BUCKET else 86400
+                    key = (src, rng)
+                    with BOARD_LOCK:        # many viewers, one computation per 20 s (60 s for a week)
+                        at, body = BOARD_CACHE.get(key, (0, None))
+                        if now - at >= (60 if rng > 86400 else 20):
+                            body = json.dumps(board(db, self.sources, src, self.targets, rng, now),
+                                              separators=(",", ":")).encode()
+                            BOARD_CACHE[key] = (now, body)
+                    return self.send(200, body, "application/json")
+                if u.path == "/api/minis":
+                    rng = int(q.get("range", 86400))
+                    ids = set(q.get("ids", "").split(",")[:150])
+                    return self.json(minis(db, src, ids, self.targets, min(max(rng, 3600), RANGES[-1]), now))
+                if u.path == "/api/compare" and t:
+                    rng = int(q.get("range", 86400))
+                    return self.json(compare(db, self.sources, t, min(max(rng, 3600), RANGES[-1]), now))
                 if u.path == "/api/target" and t:
                     rng = int(q.get("range", 86400))
                     return self.json(target_detail(db, src, t, min(max(rng, 3600), RANGES[-1]), now))
@@ -1399,10 +1615,16 @@ class Handler(BaseHTTPRequestHandler):
     def json(self, obj):
         self.send(200, json.dumps(obj, separators=(",", ":")).encode(), "application/json")
 
-    def send(self, code, body, ctype):
+    def send(self, code, body, ctype, cache=False):
+        zipped = len(body) > 1400 and "gzip" in self.headers.get("Accept-Encoding", "") and not ctype.startswith("font/")
+        if zipped:
+            body = gzip.compress(body, 5)
         self.send_response(code)
+        if zipped:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Type", ctype)
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "public, max-age=604800, immutable" if cache else "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Length", str(len(body)))
@@ -1498,10 +1720,20 @@ DEMO_TARGETS = [   # (group, name, host, scenario)
     ("Services", "Shop (HTTPS)", "tcp://203.0.113.20:443", "ok"),
     ("Services", "VPS Frankfurt", "203.0.113.10", "down"),  # dead for the last 40 min, seen from everywhere
 ]
+# ...and a fleet of sites in nested groups, so the dashboard has something to organise: a regional backbone
+# hop losing packets for every Braga site (one cause, many targets), a slow site, a dead one, a flapping one
+DEMO_SITES = [("Sites / Lisbon", 14), ("Sites / Porto", 12), ("Sites / Braga", 9), ("Cloud / AWS eu-west-1", 8),
+              ("Cloud / Azure westeurope", 5)]
+DEMO_SPECIAL = {("Sites / Lisbon", 7): "down", ("Sites / Porto", 3): "slow", ("Cloud / AWS eu-west-1", 2): "flap"}
+for gi, (group, n) in enumerate(DEMO_SITES):
+    for j in range(1, n + 1):
+        scenario = "cluster" if group == "Sites / Braga" else DEMO_SPECIAL.get((group, j), "site")
+        DEMO_TARGETS.append((group, f"{group.split(' / ')[-1].split()[0]} {j:02d}", f"10.{40 + gi}.{j}.1", scenario))
 DEMO_AGENT = "porto"   # a second vantage point: same targets, its own ISP, none of the local route trouble
 DEMO_AS = {"AS64496": "HOMENET - Home ISP, PT", "AS64497": "TRANSIT-ONE - Transit One, EU",
            "AS64498": "TRANSIT-TWO - Transit Two, EU", "AS64499": "DESTNET - Destination Networks, EU",
-           "AS64500": "PORTONET - Porto ISP, PT"}
+           "AS64500": "PORTONET - Porto ISP, PT", "AS64501": "BACKBONE - Regional Backbone, PT",
+           "AS64502": "SITES - Branch Network, PT"}
 
 
 def demo_probes(t0, remote=False):
@@ -1511,12 +1743,12 @@ def demo_probes(t0, remote=False):
     def state(host, ts):
         i, s = scen[host]
         if remote:
-            s = {"reroute": "ok", "flap": "ok", "lan": "ok"}.get(s, s)
+            s = {"reroute": "ok", "flap": "ok", "lan": "ok", "slow": "site"}.get(s, s)
         age, rnd = t0 - ts, random.Random(f"{host}/{ts}/{remote}")
         hour = time.localtime(ts).tm_hour + time.localtime(ts).tm_min / 60
-        base = 0.4 if s == "lan" else 6.0 + 7 * i + (4 if remote else 0)
+        base = 0.4 if s == "lan" else 6.0 + 7 * (i % 9) + (4 if remote else 0)
         extra = 0.0 if s == "lan" else 3 * max(0.0, math.sin((hour - 13) / 12 * math.pi))   # evening congestion
-        route, loss, sd, down = 0, 0.0005, base * 0.05 + 0.15, False
+        route, loss, sd, down = 0, 0.0003, base * 0.05 + 0.15, False
         if s == "reroute" and (4 * 3600 <= age < 6 * 3600 or 72 * 3600 <= age < 74 * 3600):
             route, extra, loss, sd = 1, extra + 18, 0.10, sd * 3
         if s == "flap" and age < 3 * 3600:
@@ -1526,6 +1758,10 @@ def demo_probes(t0, remote=False):
             loss = 0.15
         if s == "down" and age < 40 * 60:
             down = True
+        if s == "cluster" and age < 50 * 60 and not remote:    # the Braga backbone hop drops a quarter; porto goes round it
+            loss, sd = 0.25, sd * 2
+        if s == "slow" and age < 2 * 3600:                     # a congested site link: +30 ms, still answering
+            extra, sd = extra + 30, sd * 4
         if rnd.random() < 0.03:
             sd *= 6
         return rnd, i, s, base + extra, loss, sd, route, down
@@ -1535,6 +1771,10 @@ def demo_probes(t0, remote=False):
             return [(host, None)]
         isp = ([("10.20.0.1", None), ("100.72.0.1", "AS64500"), ("198.51.100.200", "AS64500")] if remote else
                [("192.168.1.1", None), ("100.64.0.1", "AS64496"), (None, None), ("198.51.100.1", "AS64496")])
+        if s in ("site", "cluster", "slow") or host.startswith("10.4"):
+            region = host.split(".")[1]
+            alt = route and s == "flap"
+            return isp + [(f"100.70.{region}.{2 if alt else 1}", "AS64501"), (host, "AS64502")]
         mid = ([(f"198.51.100.{20 + i}", "AS64497"), (f"203.0.113.{100 + i}", "AS64497")] if route == 0 else
                [(f"198.51.100.{120 + i}", "AS64498"), (f"198.51.100.{140 + i}", "AS64498"),
                 (f"203.0.113.{160 + i}", "AS64498")])
@@ -1543,7 +1783,11 @@ def demo_probes(t0, remote=False):
     def ping(targets, ts):
         out = {}
         for t in targets:
-            rnd, _, _, lat, loss, sd, _, down = state(t["host"], ts)
+            rnd, _, s, lat, loss, sd, _, down = state(t["host"], ts)
+            if s == "cluster" and loss > 0.2:   # 3 to 8 of 20 lost every round, so all nine show, not most of them
+                lost = set(rnd.sample(range(PINGS), min(PINGS, rnd.choice([3, 4, 5, 6, 7, 8]))))
+                out[t["id"]] = [None if k in lost else round(lat + abs(rnd.gauss(0, sd)), 3) for k in range(PINGS)]
+                continue
             out[t["id"]] = [None if down or rnd.random() < loss else round(lat + abs(rnd.gauss(0, sd)), 3)
                             for _ in range(PINGS)]
         return out
@@ -1560,6 +1804,8 @@ def demo_probes(t0, remote=False):
                 hl = rnd.choice([10.0, 20.0])
             elif s == "reroute" and route == 1 and k >= 5:
                 hl = rnd.choice([0.0, 10.0, 10.0, 20.0])
+            elif s == "cluster" and loss > 0.2 and k >= len(p) - 1:
+                hl = rnd.choice([20.0, 30.0])
             if down and k >= 5:
                 ip, asn = None, None
             if ip is None:
@@ -1674,8 +1920,11 @@ def main():
         init_db(db, a.name)
         probes = {a.name: demo_probes(t0), DEMO_AGENT: demo_probes(t0, remote=True)}
         Handler.db, Handler.targets, Handler.sources, Handler.agents = db, targets, list(probes), {}
+        core = [t for t in targets if not t["group"].startswith(("Sites", "Cloud"))]
+        fleet = [t for t in targets if t not in core]
         for name, (ping_fn, trace_fn) in probes.items():
-            seed_demo(db, name, targets, ping_fn, trace_fn, t0)
+            seed_demo(db, name, core, ping_fn, trace_fn, t0)
+            seed_demo(db, name, fleet, ping_fn, trace_fn, t0, days=2)     # a faster start; the week is for the core
             after = lambda ts, name=name: ALERTS.check(db, name)
             threading.Thread(target=collector, args=(db, name, lambda: targets, ping_fn, trace_fn),
                              kwargs={"after": after}, daemon=True).start()

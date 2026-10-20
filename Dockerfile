@@ -10,6 +10,7 @@ RUN python -m pip uninstall -y pip setuptools wheel; \
 
 WORKDIR /app
 COPY smoketrace.py index.html targets.ini ./
+COPY fonts ./fonts
 
 # Runs as root inside the container on purpose: raw ICMP needs CAP_NET_RAW, and the compose files drop every
 # other capability, so root here holds that one and nothing else (with no-new-privileges and a read-only root).
