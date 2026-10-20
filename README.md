@@ -34,7 +34,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="docs/overview-light.jpg">
-    <img alt="The dashboard: groups on the left, the KPIs, filters, a heatmap of every target over the last 24 hours, and on the right what needs attention, starting with nine targets that lose packets at the same backbone hop" src="docs/overview.jpg">
+    <img alt="The dashboard: groups on the left; under the title, the finding (12 of 55 targets need attention, 9 of them lose packets at one backbone router); a strip of status counts; a heatmap of every target over the last 24 hours where only trouble has colour; on the right, what needs attention" src="docs/overview.jpg">
   </picture>
 </p>
 
@@ -67,23 +67,27 @@ something changes for good, it tells you, with that reading in the message.
 Built for hundreds of targets, not a handful: the **dashboard** is organised by your groups and answers "what is
 wrong, since when, and is it one cause or many" before you click anything.
 
-- **Groups on the left**, as a tree with counts and a status bar per group (SmokePing's `+` / `++` tree, or the
-  `[Group]` sections of `targets.ini`, `/` nesting them). Click one and everything on the page is about it.
-- **KPIs** for what is in view: how many are OK, down, degraded, the median latency with its trend, the worst
-  loss, route changes, and which vantage points are reporting. Each is a filter: click *Down* to see only those.
+- **Groups on the left**, as a tree with counts per group (SmokePing's `+` / `++` tree, or the `[Group]`
+  sections of `targets.ini`, `/` nesting them). Click one and everything on the page is about it.
+- **The finding first.** The line under the title says what is wrong in what you are looking at: "12 of 55
+  targets need attention. 9 of them lose packets at 100.70.42.1 (Regional Backbone)", with the link that shows
+  only those nine.
+- **One strip of counts** (down, critical, warning, no data, OK, route changes) that is also the filter: click
+  *Down* and the list is the down targets. Zeros print as zeros, in grey.
 - **Filters** that stack and live in the address bar, so a view can be shared: status, probe (ICMP, TCP, DNS),
   "route changed", a search over names, groups and addresses (<kbd>/</kbd>), sorting by severity, latency, loss,
   jitter, how far above usual, or route changes.
 - **Three views of the same list**:
-  - a **heatmap**, one row per target and one cell per 5 min to 2 h, coloured by status, by latency against the
-    target's usual, or by loss; route changes marked on top; whole groups fold into one summary row; hover any
-    cell for its numbers and click it for that moment's traceroute;
+  - a **heatmap**, one row per target and one cell per 5 min to 2 h, by status, by latency against the
+    target's usual, or by loss; what is fine stays grey, so the three red cells among 500 rows are seen first;
+    route changes marked on top; whole groups fold into one summary row; hover any cell for its numbers and
+    click it for that moment's traceroute;
   - a **table** you can sort, with a history strip per target;
   - **cards** with a small chart each, for the targets that need you.
 - **Needs attention**: every problem with how long it has lasted, its loss and latency against usual, the hop
   where loss starts (with its operator) or where the trace stops, and what the other sites see. When several
-  targets point at the **same hop**, it says so first: one cause is likelier than many. When most problems are
-  seen from one site only, it says to look near that site.
+  targets point at the **same hop**, it says so first. When most problems are seen from one site only, it says
+  to look near that site.
 - **A timeline** of status changes, route changes and agents that went quiet, day by day, each a link to that
   moment.
 
@@ -94,16 +98,18 @@ wrong, since when, and is it one cause or many" before you click anything.
   </tr>
 </table>
 
-Each **target** has its own page: the latency and its smoke, loss and route on one time axis, the other sites'
-medians over it (*Compare sites*), the traceroute of any moment against the previous route, the latency hop by
-hop, and the target's own events.
+Each **target** has its own page: a sentence on what is true about it now, the latency and its smoke, loss and
+route on one time axis, the other sites' medians over it (*Compare sites*), the traceroute of any moment against
+the previous route, the latency hop by hop, and the target's own events. The traceroute draws both routes as
+lines beside the hops: one line where they share a router, two side by side where they part, a red station where
+real loss starts. The moment you pick is in the address, so back, reload and a shared link show the same one.
 
 <p align="center"><img alt="A target's page: a latency step, the loss under it, route B in the route strip, the traceroute against route A, the latency by hop and the events" src="docs/detail.jpg"></p>
 
 <table>
   <tr>
     <td valign="top" width="68%">
-      <img alt="The traceroute on route B against route A: three hops changed, one new, the AS and operator of every hop, real loss from hop 5" src="docs/trace.jpg"><br><br>
+      <img alt="The traceroute on route B against route A: the two route lines part at hop 5 and the new route ends with a red station where loss starts; the AS and operator of every hop" src="docs/trace.jpg"><br><br>
       <img alt="Two paths taking turns over three hours, route B costing 3 ms, with the tooltip open" src="docs/flap.jpg">
     </td>
     <td valign="top" align="center">

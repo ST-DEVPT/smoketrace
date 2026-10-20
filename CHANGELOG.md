@@ -2,6 +2,37 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.7.0] - 2026-10-21
+
+**Navigation fixed.** Moving around quickly could show the wrong data:
+
+- A slow answer could paint over a newer one: a week-long overview arriving after you had gone back to 24 hours
+  (the 24 h button pressed, a week of data shown), a target's 30 days after you had picked 3 hours, an earlier
+  traceroute after a later click, a background refresh switching the source back. Each kind of request is now
+  numbered and only the newest is shown.
+- Back from a target returns to the overview where you left it: the page, the heatmap and the table scroll.
+  <kbd>Esc</kbd> and the *Overview* link go back the same way instead of adding a history entry.
+- The moment whose traceroute you picked is in the address (`#/t/<id>?at=<time>`): reload, back and forward and a
+  shared link show that moment, and changing `at=` on the same target loads it.
+- `test_ui.py` checks all of this in a real browser, with slowed answers; CI runs it.
+
+**The look, reworked** (using the guidance of the *impeccable*, *taste*, *ui-ux-pro-max* and *no-ai-slop* skills):
+
+- The line under the title states the finding for what you are looking at ("12 of 55 targets need attention. 9 of
+  them lose packets at 100.70.42.1 (Regional Backbone)") with the link that shows only those; a target's page
+  says what is true about it now ("Losing 30 % of pings for 49 min. Real loss starts at hop 5 …").
+- One strip of counts is also the status filter; the separate status chips are gone, and zeros print in grey.
+- What is fine is grey and only trouble has colour, in the heatmap, the table and the icons; no data is a dash,
+  not a cell.
+- The traceroute draws both routes as transit lines beside the hops: one line where they share a router, two
+  where they part, a red station where real loss starts. The "before" column shows only when the hops differ, and
+  the table fits its column on a laptop and on a phone.
+- The median is the one line in colour on the chart; app-sized type (32 px title, 32 px figures); drawn icons
+  instead of text arrows and triangles; themed selection and scrollbars; a refresh button next to "Updated";
+  loading shows the layout with grey bars; losing the connection is a quiet notice that says how old the figures
+  are, not a red band.
+- Copy rewritten to say the fact first, without colon reveals or closing aphorisms.
+
 ## [0.6.0] - 2026-10-20
 
 Hundreds of targets, measured on 555 with a week of history:

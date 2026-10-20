@@ -62,6 +62,21 @@ jobs:
       - name: The Grafana dashboard is valid JSON
         run: python -m json.tool docs/grafana.json > /dev/null
 
+  ui:
+    # the page in a real browser: navigation, back, the address, and slowed answers that arrive out of order
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
+        with:
+          python-version: "3.13"
+      - run: pip install playwright==1.63.0 && python -m playwright install --with-deps chromium
+      - name: Click through the demo
+        run: |
+          python smoketrace.py --demo --port 8099 &
+          for i in $(seq 60); do curl -fs 127.0.0.1:8099/api/overview > /dev/null && break; sleep 1; done
+          python test_ui.py http://127.0.0.1:8099
+
   probes:
     # the real probes, not the demo: one round of fping, TCP, DNS and mtr (with AS lookups) against the runner
     # itself (hosted runners cannot ping the internet, but loopback proves the commands and the parsing);
@@ -120,7 +135,7 @@ jobs:
     # the image as shipped, configured from a SmokePing config: a server and a remote agent (a SmokePing slave with
     # its secret), each with only NET_RAW, a read-only root and no-new-privileges, probing loopback for real;
     # the agent takes its targets and its pings from the server and its rounds must reach it
-    needs: [test, demo, probes]
+    needs: [test, demo, ui, probes]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
