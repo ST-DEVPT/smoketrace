@@ -166,7 +166,7 @@ jobs:
       - name: Prometheus metrics
         run: curl -fs 127.0.0.1:8099/metrics | tee metrics.txt | grep -q 'smoketrace_median_seconds{target="lan-loopback"'
       - name: The page and its fonts are in the image
-        run: curl -fs 127.0.0.1:8099/ | grep -q "<title>smoketrace</title>" && curl -fsI 127.0.0.1:8099/fonts/archivo.woff2 | grep -qi "font/woff2"
+        run: curl -fs 127.0.0.1:8099/ | grep -q "<title>smoketrace</title>" && curl -fs -o /dev/null -D - 127.0.0.1:8099/fonts/archivo.woff2 | grep -qi "font/woff2"
       - name: Docker reports the server healthy
         run: |
           for i in $(seq 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' server)" = healthy ] && exit 0; sleep 2; done
