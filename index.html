@@ -497,12 +497,14 @@ const worstOf = list => list.reduce((w, x) => SEV[x.status] > SEV[w] ? x.status 
 // ---------- state ----------
 const BRANGES = [[21600, "6 h"], [86400, "24 h"], [604800, "7 d"]];
 const DRANGES = [[10800, "3 h"], [86400, "24 h"], [604800, "7 d"], [2592000, "30 d"]];
+const pick = (v, ok, d) => ok.map(String).includes(String(v)) ? (typeof d === "number" ? +v : v) : d;   // a saved choice, if still valid
 const S = {
-  b: null, bAt: 0, offline: false, src: store.get("src", ""), range: +store.get("brange", 86400) || 86400,
-  view: store.get("view", "heat"), mode: store.get("hmode", "status"), sort: store.get("sort", "sev"), grouped: store.get("grouped", "1") === "1",
+  b: null, bAt: 0, offline: false, src: store.get("src", ""), range: pick(store.get("brange"), BRANGES.map(r => r[0]), 86400),
+  view: pick(store.get("view"), ["heat", "table", "cards"], "heat"), mode: pick(store.get("hmode"), ["status", "latency", "loss"], "status"),
+  sort: pick(store.get("sort"), ["sev", "name", "lat", "loss", "jit", "base", "rc"], "sev"), grouped: store.get("grouped", "1") === "1", tshown: 0,
   f: { g: "", st: new Set(), p: new Set(), rc: false, q: "", ids: new Set() },
   open: new Set(JSON.parse(store.get("treeOpen", "[]"))), shut: new Set(), cards: 60, minis: {}, minisKey: "", tl: "all", dash: "#/",
-  id: null, det: null, detErr: null, drange: +store.get("range", 86400) || 86400, sel: null, vs: "route", trace: null,
+  id: null, det: null, detErr: null, drange: pick(store.get("range"), DRANGES.map(r => r[0]), 86400), sel: null, vs: "route", trace: null,
   hover: null, geo: null, cmp: null, showCmp: store.get("cmp", "0") === "1", hm: null, hmGeo: null,
 };
 const byId = () => new Map((S.b?.targets || []).map(x => [x.id, x]));
@@ -559,6 +561,7 @@ function dashHash() {
 }
 function setFilters(fn) {
   fn(S.f);
+  S.tshown = 0;
   S.dash = dashHash();
   if (S.id) { location.hash = S.dash; return; }
   history.replaceState(null, "", S.dash);
@@ -675,7 +678,7 @@ function renderDash() {
   const head = (title, lede) => `<div class="page-head"><div><h1>${title}</h1>${lede ? `<p class="lede">${lede}</p>` : ""}</div></div>`;
   if (!S.b) { v.dataset.view = "loading"; v.innerHTML = head(t("overview"), t("loading")); return; }
   if (!S.b.targets.length) { v.dataset.view = "empty"; v.innerHTML = head(t("overview")) + empty(t("noTargetsT"), t("noTargetsB")); return; }
-  const keepTop = $("#hmScroll")?.scrollTop || 0;
+  const keepTop = $("#hmScroll")?.scrollTop || 0, keepTw = $("#tw")?.scrollTop || 0;   // a refresh keeps the place
   v.dataset.view = "dash";
   const b = S.b, sc = scoped(), list = shownList();
   const parts = S.f.g ? S.f.g.split(" / ") : [];
@@ -697,6 +700,7 @@ function renderDash() {
     </div>`;
   if (S.view === "heat" && list.length) { buildHeat(list); sizeHeat(); $("#hmScroll").scrollTop = keepTop; drawHeat(); }
   if (S.view === "cards") watchCards();
+  if ($("#tw")) { $("#tw").scrollTop = keepTw; watchTable(); }
 }
 
 function kpis(sc) {
@@ -902,14 +906,15 @@ function heatTip(e, hit) {
   tip.innerHTML = html; tip.hidden = false; placeTip(e);
 }
 
-// ---------- table ----------
-function stripCss(x) {
-  const n = x.sev.length, cols = { "0": cssv("--cell-ok"), "1": cssv("--warn"), "2": cssv("--crit"), "3": cssv("--down"), ".": cssv("--cell-none") };
-  const parts = [];
+// ---------- table: rows are added as they scroll into view (hundreds at once cost hundreds of ms) ----------
+const TCHUNK = 150;
+let TROWS = [], TCTX = null;
+function stripCss(x, cols) {
+  const n = x.sev.length, parts = [];
   for (let i = 0; i < n; i++) parts.push(`${cols[x.sev[i]]} ${(i / n * 100).toFixed(2)}% ${((i + 1) / n * 100).toFixed(2)}%`);
   return `linear-gradient(90deg, ${parts.join(",")})`;
 }
-function rowHtml(x) {
+function rowHtml(x, cols) {
   const d = x.median != null && x.baseline ? x.median - x.baseline : 0;
   const delta = d >= Math.max(2, x.baseline * .2) ? `<span class="dlt" title="${esc(t("above", ms(d) + " ms"))}">▲${NB}+${ms(d)}</span>` : "";
   const seen = x.by_source ? `<td><span class="dots">${Object.entries(x.by_source).map(([s, st]) => `<span title="${esc(s)}: ${t(st)}">${icon(st)}${esc(s)}</span>`).join("")}</span></td>` : (S.b.sources.length > 1 ? "<td></td>" : "");
@@ -919,23 +924,42 @@ function rowHtml(x) {
     ${S.grouped ? "" : `<td class="muted">${esc(x.group)}</td>`}
     <td class="num mono">${msU(x.median)}${delta}</td><td class="num mono hide-s">${msU(x.jitter)}</td>
     <td class="num mono" style="${x.loss > 0 ? "font-weight:700" : ""}">${pct(x.loss)}</td>
-    <td class="hide-s"><div class="strip" style="background:${stripCss(x)}"></div></td>
+    <td class="hide-s"><div class="strip" style="background:${stripCss(x, cols)}"></div></td>
     <td class="hide-s">${x.route_changes ? `<span class="st">${SWAP}${x.route_changes}</span>` : '<span class="dim">—</span>'}</td>
     ${seen}</tr>`;
 }
 function tableHtml(list) {
   const sortBtn = (k, l, cls = "") => `<th class="${cls}"><button data-sortk="${k}" aria-pressed="${S.sort === k}">${t(l)}</button></th>`;
-  const multi = S.b.sources.length > 1, cols = 7 + (multi ? 1 : 0) + (S.grouped ? 0 : 1);
-  let body = "";
-  if (S.grouped) for (const [g, items] of groupsOf(list)) {
-    const c = counts(items), bad = c.down + c.crit + c.warn;
-    body += `<tr class="grp"><td colspan="${cols}">${esc(g)} <span class="dim mono">${bad ? `${bad}/` : ""}${items.length}</span></td></tr>${items.map(rowHtml).join("")}`;
-  } else body = list.map(rowHtml).join("");
-  return `<div class="tw" style="max-height:${Math.max(420, innerHeight - 200)}px;overflow:auto"><table><thead><tr>
+  const multi = S.b.sources.length > 1, span = 7 + (multi ? 1 : 0) + (S.grouped ? 0 : 1);
+  TCTX = { span, cols: { "0": cssv("--cell-ok"), "1": cssv("--warn"), "2": cssv("--crit"), "3": cssv("--down"), ".": cssv("--cell-none") } };
+  TROWS = S.grouped ? groupsOf(list).flatMap(([g, items]) => [{ g, items }, ...items.map(x => ({ x }))]) : list.map(x => ({ x }));
+  const n = Math.max(TCHUNK, S.tshown);
+  const body = TROWS.slice(0, n).map(trow).join("") + (n < TROWS.length ? `<tr id="tmore"><td colspan="${span}" class="dim">${t("loading")}</td></tr>` : "");
+  return `<div class="tw" id="tw" style="max-height:${Math.max(420, innerHeight - 200)}px;overflow:auto"><table><thead><tr>
     ${sortBtn("sev", "status")}${sortBtn("name", "cTarget")}${S.grouped ? "" : `<th><button>${t("cGroup")}</button></th>`}
     ${sortBtn("lat", "cMedian", "num")}${sortBtn("jit", "cJitter", "num hide-s")}${sortBtn("loss", "cLoss", "num")}
     <th class="hide-s"><button>${t("cStrip")}</button></th>${sortBtn("rc", "cRoutes", "hide-s")}${multi ? `<th><button>${t("cSeen")}</button></th>` : ""}
     </tr></thead><tbody>${body}</tbody></table></div>`;
+}
+function trow(r) {
+  if (r.x) return rowHtml(r.x, TCTX.cols);
+  const c = counts(r.items), bad = c.down + c.crit + c.warn;
+  return `<tr class="grp"><td colspan="${TCTX.span}">${esc(r.g)} <span class="dim mono">${bad ? `${bad}/` : ""}${r.items.length}</span></td></tr>`;
+}
+let tableObs = null;
+function watchTable() {
+  tableObs?.disconnect();
+  const more = $("#tmore");
+  if (!more) return;
+  tableObs = new IntersectionObserver(es => {
+    if (!es.some(e => e.isIntersecting)) return;
+    const shown = Math.max(TCHUNK, S.tshown), next = TROWS.slice(shown, shown + TCHUNK);
+    more.insertAdjacentHTML("beforebegin", next.map(trow).join(""));
+    S.tshown = shown + next.length;
+    if (S.tshown >= TROWS.length) { tableObs.disconnect(); more.remove(); }
+    else { tableObs.unobserve(more); tableObs.observe(more); }      // still in view: observing again asks again
+  }, { root: $("#tw"), rootMargin: "400px" });
+  tableObs.observe(more);
 }
 
 // ---------- cards ----------

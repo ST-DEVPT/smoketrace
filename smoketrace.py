@@ -48,7 +48,8 @@ HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
 MTR_CYCLES = 10
-RETENTION_DAYS = 30         # ponytail: raw rows, no RRD consolidation; ~1 KB per trace, fine for tens of targets
+TRACE_PARALLEL = 16         # mtr at once at most: each raw socket sees every ICMP reply of the others (CPU ~ n²)
+RETENTION_DAYS = 30         # ponytail: raw rows, no RRD consolidation; ~1 KB per trace, a few GB at 500 targets
 LOSS_WARN, LOSS_CRIT = 10.0, 20.0       # % lost in the last round: 2 of 20 pings warn, 4 are critical; per target too
 LAT_FACTOR, LAT_MARGIN = 1.5, 10.0      # warn when median > 24 h baseline * 1.5 + 10 ms
 MAX_POINTS = 600            # chart points per request; longer ranges are bucketed
@@ -506,17 +507,42 @@ def summarize(rtts):
     return med, loss, jit, sorted(seq)
 
 
-def trace_workers(n_targets):
+def trace_workers(n_traces):
     """mtr runs at least MTR_CYCLES seconds (one cycle a second, more for silent hops): enough of them in
-    parallel that every target's trace fits in two thirds of the step, from 8 up to 64 at once."""
-    return min(64, max(8, math.ceil(n_targets * (MTR_CYCLES + 5) / (STEP * 2 / 3))))
+    parallel that the round's traces fit in two thirds of the step, from 4 up to TRACE_PARALLEL at once."""
+    return min(TRACE_PARALLEL, max(4, math.ceil(n_traces * (MTR_CYCLES + 5) / (STEP * 2 / 3))))
 
 
-def probe_round(targets, ts, ping_fn, trace_fn):
-    """Latency and traceroutes go out together, so both describe the same minutes.
-    -> ({target id: rtts} or None when the latency probe itself failed, {target id: hops})"""
-    with ThreadPoolExecutor(max_workers=trace_workers(len(targets))) as pool:
-        futs = {t["id"]: pool.submit(trace_fn, t, ts) for t in targets}
+def trace_capacity():
+    """Traces that fit in one round with TRACE_PARALLEL mtr at once."""
+    return max(1, int(TRACE_PARALLEL * (STEP * 2 / 3) // (MTR_CYCLES + 5)))
+
+
+def trace_plan(targets, ts, lossy=()):
+    """The targets traced this round: all of them when they fit, else each in turn every k rounds, plus (in
+    the room left) those that lost packets in the last round, where a traceroute says the most."""
+    room = trace_capacity()
+    if len(targets) <= room:
+        return targets
+    k = math.ceil(len(targets) / max(1, room * 3 // 4))
+    ordered = sorted(targets, key=lambda t: t["id"])
+    plan = ordered[ts // STEP % k::k]
+    ids = {t["id"] for t in plan}
+    return plan + [t for t in ordered if t["id"] in lossy and t["id"] not in ids][:room - len(plan)]
+
+
+def lost(pings):
+    """Targets that lost at least one ping this round."""
+    return {tid for tid, rtts in (pings or {}).items() if None in rtts}
+
+
+def probe_round(targets, ts, ping_fn, trace_fn, lossy=()):
+    """Latency and traceroutes go out together, so both describe the same minutes; with many targets only
+    some are traced each round (trace_plan). -> ({target id: rtts} or None when the latency probe itself
+    failed, {target id: hops})"""
+    traced = trace_plan(targets, ts, lossy)
+    with ThreadPoolExecutor(max_workers=trace_workers(len(traced))) as pool:
+        futs = {t["id"]: pool.submit(trace_fn, t, ts) for t in traced}
         try:
             pings = ping_fn(targets, ts) if targets else {}
         except Exception as e:      # collector failure: leave a gap, never fake 100 % loss
@@ -605,25 +631,35 @@ def path_of(hops):
     return p
 
 
+def path_key(hops):
+    """The route stored next to a trace, 'ip,ip,,ip': comparing routes then needs no JSON."""
+    return ",".join(ip or "" for ip in path_of(hops))
+
+
+def split_path(key):
+    return [ip or None for ip in key.split(",")] if key else []
+
+
 def same_path(a, b):
     """Same route = same IP at every TTL; a silent hop matches anything (ICMP-silent routers come and go)."""
     return len(a) == len(b) and all(x == y or x is None or y is None for x, y in zip(a, b))
 
 
 def route_segments(traces):
-    """[(ts, hops)] sorted -> (segments, known paths). Each segment: {route, from, to, end}."""
-    known, segs = [], []
-    for ts, hops in traces:
-        p = path_of(hops)
-        if segs and same_path(known[segs[-1]["route"]], p):
-            i = segs[-1]["route"]
-        else:
-            i = next((k for k, q in enumerate(known) if same_path(q, p)), None)
-            if i is None:
-                known.append(p)
-                i = len(known) - 1
-            segs.append({"route": i, "from": ts, "to": ts})
-        known[i] = [a if a is not None else b for a, b in zip(known[i], p)]
+    """[(ts, path key)] sorted -> (segments, known paths). Each segment: {route, from, to, end}."""
+    known, segs, last = [], [], None
+    for ts, key in traces:
+        if key != last:         # most rounds repeat the last path: only a different one is looked at
+            p, last = split_path(key), key
+            if segs and same_path(known[segs[-1]["route"]], p):
+                i = segs[-1]["route"]
+            else:
+                i = next((k for k, q in enumerate(known) if same_path(q, p)), None)
+                if i is None:
+                    known.append(p)
+                    i = len(known) - 1
+                segs.append({"route": i, "from": ts, "to": ts})
+            known[i] = [a if a is not None else b for a, b in zip(known[i], p)]
         segs[-1]["to"] = ts
     for a, b in zip(segs, segs[1:]):
         a["end"] = b["from"]
@@ -677,19 +713,27 @@ def threshold(t, key, default):
     return default if v is None else v
 
 
+def status_fn(t, baseline):
+    """(median, loss) -> status of one round of one target; its limits are looked up once, not per round."""
+    crit, warn = threshold(t, "loss_crit", LOSS_CRIT), threshold(t, "loss_warn", LOSS_WARN)
+    lat = threshold(t, "latency_warn", None)
+    slow = baseline * LAT_FACTOR + LAT_MARGIN if baseline else None
+
+    def status(median, loss):
+        if loss >= 100:
+            return "down"
+        if loss >= crit:
+            return "crit"
+        if loss >= warn or median is not None and (lat is not None and median > lat or slow is not None and median > slow):
+            return "warn"
+        return "ok"
+    return status
+
+
 def status_of(now, last_ts, median, loss, baseline, t=None):
     if last_ts is None or now - last_ts > 3 * STEP:
         return "stale"
-    if loss >= 100:
-        return "down"
-    if loss >= threshold(t, "loss_crit", LOSS_CRIT):
-        return "crit"
-    lat = threshold(t, "latency_warn", None)
-    if (loss >= threshold(t, "loss_warn", LOSS_WARN)
-            or (median is not None and lat is not None and median > lat)
-            or (median is not None and baseline and median > baseline * LAT_FACTOR + LAT_MARGIN)):
-        return "warn"
-    return "ok"
+    return status_fn(t, baseline)(median, loss)
 
 
 def bucketize(rows, bucket):
@@ -800,13 +844,35 @@ def init_db(path, source):
                    " jitter REAL, rtts TEXT, PRIMARY KEY (source, target, ts)) WITHOUT ROWID")
         db.execute("CREATE TABLE IF NOT EXISTS trace (source TEXT, target TEXT, ts INTEGER, hops TEXT,"
                    " PRIMARY KEY (source, target, ts)) WITHOUT ROWID")
+        # each trace's route as 'ip,ip,,ip', apart from its hops: route history reads ~30 bytes a row, not ~1 KB
+        db.execute("CREATE TABLE IF NOT EXISTS path (source TEXT, target TEXT, ts INTEGER, path TEXT,"
+                   " PRIMARY KEY (source, target, ts)) WITHOUT ROWID")
         db.execute("CREATE TABLE IF NOT EXISTS asn (asn TEXT PRIMARY KEY, name TEXT, ts INTEGER) WITHOUT ROWID")
+        # one row per stored round: "when did each source last report" without scanning every ping
+        db.execute("CREATE TABLE IF NOT EXISTS rounds (source TEXT, ts INTEGER, PRIMARY KEY (source, ts)) WITHOUT ROWID")
         if old and "source" not in old:
             db.execute("INSERT INTO ping SELECT ?, * FROM ping_v1", (source,))
-            db.execute("INSERT INTO trace SELECT ?, * FROM trace_v1", (source,))
+            db.execute("INSERT INTO trace (source, target, ts, hops) SELECT ?, * FROM trace_v1", (source,))
             db.execute("DROP TABLE ping_v1")
             db.execute("DROP TABLE trace_v1")
             log(f"database upgraded: existing data now belongs to {source!r}")
+        if not db.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
+            db.execute("INSERT OR IGNORE INTO rounds SELECT DISTINCT source, ts FROM ping")
+
+
+def fill_paths(path, pairs):
+    """Traces stored before 0.6 have no row in `path`: add them, a (source, target) at a time, in the background."""
+    n = 0
+    for src, tid in pairs:
+        with db_open(path) as db:
+            first = db.execute("SELECT MIN(ts) FROM path WHERE source=? AND target=?", (src, tid)).fetchone()[0]
+            rows = db.execute("SELECT ts, hops FROM trace WHERE source=? AND target=? AND ts<?",
+                              (src, tid, 2 ** 62 if first is None else first)).fetchall()
+            db.executemany("INSERT OR IGNORE INTO path VALUES (?,?,?,?)",
+                           [(src, tid, ts, path_key(json.loads(h))) for ts, h in rows])
+        n += len(rows)
+    if n:
+        log(f"{n} older traces indexed by route")
 
 
 def round_rows(source, ts, pings, traces):
@@ -814,19 +880,33 @@ def round_rows(source, ts, pings, traces):
     for tid, rtts in (pings or {}).items():
         med, loss, jit, ok = summarize(rtts)
         rp.append((source, tid, ts, med, loss, jit, json.dumps(ok)))
-    rt = [(source, tid, ts, json.dumps(h, separators=(",", ":"))) for tid, h in traces.items() if h]
+    rt = [(source, tid, ts, json.dumps(h, separators=(",", ":")), path_key(h)) for tid, h in traces.items() if h]
     return rp, rt
+
+
+PRUNED = {"day": None}
 
 
 def store(path, rp, rt, now):
     cut = now - RETENTION_DAYS * 86400
     asns = {h["asn"] for row in rt for h in json.loads(row[3]) if h.get("asn")}
+    pairs = [(s, t, cut) for s, t in {r[:2] for r in rp} | {r[:2] for r in rt}]
     with db_open(path) as db:
         db.executemany("INSERT OR REPLACE INTO ping VALUES (?,?,?,?,?,?,?)", rp)
-        db.executemany("INSERT OR REPLACE INTO trace VALUES (?,?,?,?)", rt)
+        db.executemany("INSERT OR REPLACE INTO trace (source, target, ts, hops) VALUES (?,?,?,?)", [r[:4] for r in rt])
+        db.executemany("INSERT OR REPLACE INTO path VALUES (?,?,?,?)", [(*r[:3], r[4]) for r in rt])
         db.executemany("INSERT OR IGNORE INTO asn VALUES (?, NULL, 0)", [(a,) for a in asns])
-        db.execute("DELETE FROM ping WHERE ts < ?", (cut,))
-        db.execute("DELETE FROM trace WHERE ts < ?", (cut,))
+        db.executemany("INSERT OR IGNORE INTO rounds VALUES (?, ?)", {(r[0], r[2]) for r in rp})
+        # old rows go along the primary key, target by target: a delete on ts alone reads the whole table
+        db.executemany("DELETE FROM ping WHERE source=? AND target=? AND ts<?", pairs)
+        db.executemany("DELETE FROM trace WHERE source=? AND target=? AND ts<?", pairs)
+        db.executemany("DELETE FROM path WHERE source=? AND target=? AND ts<?", pairs)
+        db.execute("DELETE FROM rounds WHERE ts<?", (cut,))
+        if PRUNED["day"] != now // 86400:      # targets no longer in the config: once a day, the slow way
+            PRUNED["day"] = now // 86400
+            db.execute("DELETE FROM ping WHERE ts<?", (cut,))
+            db.execute("DELETE FROM trace WHERE ts<?", (cut,))
+            db.execute("DELETE FROM path WHERE ts<?", (cut,))
 
 
 def every_round(fn):
@@ -842,9 +922,14 @@ def every_round(fn):
 
 
 def collector(path, source, targets_fn, ping_fn, trace_fn, before=lambda: None, after=lambda ts: None):
+    lossy = set()
+
     def one(ts):
         before()
-        store(path, *round_rows(source, ts, *probe_round(targets_fn(), ts, ping_fn, trace_fn)), ts)
+        pings, traces = probe_round(targets_fn(), ts, ping_fn, trace_fn, lossy)
+        lossy.clear()
+        lossy.update(lost(pings))
+        store(path, *round_rows(source, ts, pings, traces), ts)
         after(ts)
     every_round(one)
 
@@ -861,10 +946,10 @@ def run_agent(server, token, ping_fn, trace_fn):
             return json.load(r)
 
     backlog = deque(maxlen=AGENT_BACKLOG)   # ponytail: in memory, lost on restart; a file if that ever matters
-    targets = []
+    targets, lossy = [], set()
 
     def one(ts):
-        nonlocal targets
+        nonlocal targets, lossy
         global STEP, PINGS
         try:
             got = call("/api/agent/targets")
@@ -873,7 +958,8 @@ def run_agent(server, token, ping_fn, trace_fn):
         except Exception as e:
             log(f"cannot fetch targets from {server}: {e}" + (" (using the last list)" if targets else ""))
         if targets:
-            pings, traces = probe_round(targets, ts, ping_fn, trace_fn)
+            pings, traces = probe_round(targets, ts, ping_fn, trace_fn, lossy)
+            lossy = lost(pings)
             backlog.append({"ts": ts, "pings": pings, "traces": traces})
         while backlog:
             try:
@@ -890,7 +976,7 @@ def run_agent(server, token, ping_fn, trace_fn):
 def run_listener(listen, token, ping_fn, trace_fn):
     """Pull mode: the server comes to us each round with our targets and takes the rounds we have."""
     host, _, port = listen.rpartition(":")
-    state = {"targets": [], "backlog": deque(maxlen=AGENT_BACKLOG)}
+    state = {"targets": [], "backlog": deque(maxlen=AGENT_BACKLOG), "lossy": set()}
     lock = threading.Lock()
 
     class Pull(BaseHTTPRequestHandler):
@@ -930,7 +1016,8 @@ def run_listener(listen, token, ping_fn, trace_fn):
         with lock:
             targets = list(state["targets"])
         if targets:
-            pings, traces = probe_round(targets, ts, ping_fn, trace_fn)
+            pings, traces = probe_round(targets, ts, ping_fn, trace_fn, state["lossy"])
+            state["lossy"] = lost(pings)
             with lock:
                 state["backlog"].append({"ts": ts, "pings": pings, "traces": traces})
 
@@ -975,9 +1062,18 @@ def pull_agent(path, name, agent):
 
 # ---------- queries ----------
 
-def load_traces(db, src, tid, since=0):
-    return [(ts, json.loads(h)) for ts, h in db.execute(
-        "SELECT ts, hops FROM trace WHERE source=? AND target=? AND ts>=? ORDER BY ts", (src, tid, since))]
+def load_paths(db, src, tid, since=0):
+    """[(ts, path key)] of one target's traces, oldest first."""
+    return db.execute("SELECT ts, path FROM path WHERE source=? AND target=? AND ts>=? ORDER BY ts", (src, tid, since)).fetchall()
+
+
+def hops_at(db, src, tid, ts):
+    return json.loads(db.execute("SELECT hops FROM trace WHERE source=? AND target=? AND ts=?", (src, tid, ts)).fetchone()[0])
+
+
+def last_rounds(db):
+    """{source: ts of its last stored round}"""
+    return dict(db.execute("SELECT source, MAX(ts) FROM rounds GROUP BY source"))
 
 
 def last_trace(db, src, tid):
@@ -994,7 +1090,7 @@ def summary(db, src, t, now, full=True):
     out = {**t, "status": status_of(now, last_ts, med, loss, base, t), "last_ts": last_ts,
            "median": med, "loss": loss, "jitter": jit, "baseline": base}
     if full:
-        segs, _ = route_segments(load_traces(db, src, t["id"], now - 86400))
+        segs, _ = route_segments(load_paths(db, src, t["id"], now - 86400))
         out.update(route_changes=max(0, len(segs) - 1), last_change=segs[-1]["from"] if len(segs) > 1 else None,
                    spark=[[ts, None if m is None else round(m, 2), l] for ts, m, l, _ in rows])
     return out
@@ -1011,7 +1107,7 @@ def targets_for(name):
 
 
 def overview(db, sources, src, targets, now):
-    last = dict(db.execute("SELECT source, MAX(ts) FROM ping GROUP BY source"))
+    last = last_rounds(db)
     rows = []
     for t in targets:
         who = probers(t, sources)
@@ -1030,7 +1126,7 @@ def target_detail(db, src, t, rng, now):
     bucket = STEP * max(1, math.ceil(rng / MAX_POINTS / STEP))
     rows = db.execute("SELECT ts, median, loss, jitter, rtts FROM ping WHERE source=? AND target=? AND ts>=? ORDER BY ts",
                       (src, t["id"], since)).fetchall()
-    segs, known = route_segments(load_traces(db, src, t["id"]))   # whole history: route letters stay stable
+    segs, known = route_segments(load_paths(db, src, t["id"]))    # whole history: route letters stay stable
     vis = [{**s, "label": label(s["route"]), "hops": len(known[s["route"]]), "change": k > 0 and s["from"] >= since}
            for k, s in enumerate(segs) if s["end"] > since]
     events = target_events(db, src, t, since, now)[:100]
@@ -1042,11 +1138,11 @@ def target_detail(db, src, t, rng, now):
 
 def trace_detail(db, src, tid, ts, vs):
     """Trace at/just before ts (latest if None) vs the last trace of the previous route, or the previous round."""
-    traces = load_traces(db, src, tid)   # ponytail: full scan per click, ~ms for 30 d; index route changes if slow
-    if not traces:
+    paths = load_paths(db, src, tid)
+    if not paths:
         return {"cur": None}
-    segs, _ = route_segments(traces)
-    tss = [x for x, _ in traces]
+    segs, _ = route_segments(paths)
+    tss = [x for x, _ in paths]
     i = len(tss) - 1 if ts is None else max(0, bisect.bisect_right(tss, ts) - 1)
     seg_at = lambda when: max((k for k, s in enumerate(segs) if s["from"] <= when), default=0)
     k = seg_at(tss[i])
@@ -1060,7 +1156,7 @@ def trace_detail(db, src, tid, ts, vs):
     def side(n):
         if n < 0:
             return None
-        when, hops = traces[n]
+        when, hops = tss[n], hops_at(db, src, tid, tss[n])
         r = segs[seg_at(when)]["route"]
         return {"ts": when, "hops": hops, "route": r, "label": label(r), "origin": loss_origin(hops)}
 
@@ -1075,19 +1171,14 @@ def trace_detail(db, src, tid, ts, vs):
 
 SEVERITY = {"ok": 0, "warn": 1, "crit": 2, "down": 3}
 BOARD_BUCKET = {6 * 3600: 300, 86400: 900, 7 * 86400: 7200}      # heatmap cell per range: 72, 96, 84 cells
-BOARD_CACHE = {}
-BOARD_LOCK = threading.Lock()
+BOARD_CACHE = {}            # (source, range) -> (computed at, data version, body)
+BOARD_LOCKS = {}
 
 
-def round_status(median, loss, baseline, t):
-    return status_of(0, 0, median, loss, baseline, t)
-
-
-def status_events(rows, baseline, t):
-    """Status changes in a run of rounds, held ALERT_ROUNDS rounds like the alerts: [(ts, from, to)]."""
+def status_events(points):
+    """Status changes in [(ts, status)], held ALERT_ROUNDS rounds like the alerts: [(ts, from, to)]."""
     out, cur, pend, n, first = [], None, None, 0, None
-    for ts, med, loss, *_ in rows:
-        st = round_status(med, loss, baseline, t)
+    for ts, st in points:
         if cur is None:
             cur = st
         elif st == cur:
@@ -1117,19 +1208,21 @@ def hop_info(db, hops):
     return {"why": why, "ttl": h["ttl"], "ip": h["ip"], "asn": h.get("asn"), "as_name": name}
 
 
-def target_events(db, src, t, since, now, rows=None, traces=None, baseline=None):
+def target_events(db, src, t, since, now, rows=None, segs=None, baseline=None, stats=None):
     """Status and route changes of one target as one source saw them, newest first."""
     if rows is None:
         rows = db.execute("SELECT ts, median, loss, jitter, rtts FROM ping WHERE source=? AND target=? AND ts>=? "
                           "ORDER BY ts", (src, t["id"], since)).fetchall()
-    if traces is None:
-        traces = load_traces(db, src, t["id"], since)
-    if baseline is None:
-        meds = [r[1] for r in rows if r[1] is not None]
-        baseline = statistics.median(meds) if meds else None
+    if segs is None:
+        segs, _ = route_segments(load_paths(db, src, t["id"], since))
+    if stats is None:
+        if baseline is None:
+            meds = [r[1] for r in rows if r[1] is not None]
+            baseline = statistics.median(meds) if meds else None
+        status = status_fn(t, baseline)
+        stats = [status(r[1], r[2]) for r in rows]
     ev = [{"ts": ts, "kind": "status", "target": t["id"], "source": src, "from": a, "to": b}
-          for ts, a, b in status_events(rows, baseline, t)]
-    segs, _ = route_segments(traces)
+          for ts, a, b in status_events(zip((r[0] for r in rows), stats))]
     ev += [{"ts": s["from"], "kind": "route", "target": t["id"], "source": src, "from": label(segs[k - 1]["route"]),
             "to": label(s["route"])} for k, s in enumerate(segs) if k > 0]
     return sorted(ev, key=lambda e: -e["ts"])
@@ -1160,16 +1253,19 @@ def board(db, sources, src, targets, rng, now):
         rows = db.execute(q, (src, t["id"], min(start, now - 86400))).fetchall()
         st, last_ts, med, loss, jit, base = status_now(rows, now, t)
         rows = [r for r in rows if r[0] >= start]
-        sev, cmed, closs = [None] * nb, [[] for _ in range(nb)], [0.0] * nb
-        for ts, m, l, _ in rows:
+        status = status_fn(t, base)
+        stats = [status(m, l) for _, m, l, _ in rows]
+        sev, cmed, closs = [-1] * nb, [[] for _ in range(nb)], [0.0] * nb
+        for (ts, m, l, _), s in zip(rows, stats):
             i = min(nb - 1, (ts - start) // width)
-            v = SEVERITY[round_status(m, l, base, t)]
-            sev[i] = v if sev[i] is None else max(sev[i], v)
-            closs[i] = max(closs[i], l)
+            v = SEVERITY[s]
+            if v > sev[i]:
+                sev[i] = v
+            if l > closs[i]:
+                closs[i] = l
             if m is not None:
                 cmed[i].append(m)
-        traces = load_traces(db, src, t["id"], start)
-        segs, _ = route_segments(traces)
+        segs, _ = route_segments(load_paths(db, src, t["id"], start))
         changes = [sg["from"] for k, sg in enumerate(segs) if k > 0]
         meds = []
         for i, c in enumerate(cmed):
@@ -1177,7 +1273,7 @@ def board(db, sources, src, targets, rng, now):
             meds.append(v)
             if v is not None:
                 fleet[i].append(v)
-        evs = target_events(db, src, t, start, now, rows, traces, base)
+        evs = target_events(db, src, t, start, now, rows, segs, base, stats)
         events += evs
         by = None
         if len(sources) > 1:
@@ -1187,13 +1283,13 @@ def board(db, sources, src, targets, rng, now):
                     "port": t["port"], "lookup": t["lookup"], "status": st, "last_ts": last_ts, "median": med,
                     "loss": loss, "jitter": jit, "baseline": base, "route_changes": len(changes),
                     "last_change": changes[-1] if changes else None, "by_source": by,
-                    "sev": "".join("." if v is None else str(v) for v in sev), "med": meds,
+                    "sev": "".join("." if v < 0 else str(v) for v in sev), "med": meds,
                     "cl": [round(v) for v in closs],
                     "rc": sorted({min(nb - 1, (ts - start) // width) for ts in changes})})
         if st != "ok":
             since = next((e["ts"] for e in evs if e["kind"] == "status" and e["to"] == st), None)
             problems.append({"id": t["id"], "status": st, "since": since,
-                             "hop": hop_info(db, traces[-1][1]) if traces and st != "stale" else None,
+                             "hop": hop_info(db, last_trace(db, src, t["id"])) if segs and st != "stale" else None,
                              "elsewhere": {k: v for k, v in (by or {}).items() if k != src}})
     points = {}
     for pr in problems:
@@ -1208,12 +1304,11 @@ def board(db, sources, src, targets, rng, now):
             local = src               # broken from here only: the problem is near this vantage point
     agent_ev = []
     for name in sources:
-        tss = [r[0] for r in db.execute("SELECT DISTINCT ts FROM ping WHERE source=? AND ts>=? ORDER BY ts",
-                                        (name, start))]
+        tss = [r[0] for r in db.execute("SELECT ts FROM rounds WHERE source=? AND ts>=? ORDER BY ts", (name, start))]
         for a, b in zip(tss, tss[1:]):
             if b - a > 3 * STEP:
                 agent_ev += [{"ts": a + STEP, "kind": "quiet", "source": name}, {"ts": b, "kind": "back", "source": name}]
-    last = dict(db.execute("SELECT source, MAX(ts) FROM ping GROUP BY source"))
+    last = last_rounds(db)
     events = sorted(events + agent_ev, key=lambda e: -e["ts"])[:500]
     return {"now": now, "step": STEP, "source": src, "range": rng, "start": start, "width": width, "cells": nb,
             "auth": bool(PASSWORD), "sources": [{"name": x, "last_ts": last.get(x)} for x in sources], "targets": out,
@@ -1309,11 +1404,14 @@ class Alerter:
 
     def one(self, db, src, t, now):
         s = summary(db, src, t, now, full=False)
-        hops = last_trace(db, src, t["id"])
+        row = db.execute("SELECT ts, hops FROM trace WHERE source=? AND target=? ORDER BY ts DESC LIMIT 1",
+                         (src, t["id"])).fetchone()
+        tts, hops = (row[0], json.loads(row[1])) if row else (None, [])
         key = (src, t["id"])
         k = self.state.get(key)
         if k is None:       # first look after a start: remember, do not alert
-            self.state[key] = {"status": s["status"], "pend": None, "n": 0, "hops": hops, "phops": None, "pn": 0}
+            self.state[key] = {"status": s["status"], "pend": None, "n": 0, "hops": hops, "phops": None, "pn": 0,
+                               "tts": tts}
             return
         st = s["status"]
         if st != "stale":   # a silent source is one alert for the source, not one per target
@@ -1325,6 +1423,9 @@ class Alerter:
                 if k["n"] >= ALERT_ROUNDS:
                     old, k["status"], k["pend"], k["n"] = k["status"], st, None, 0
                     self.send(self.status_event(db, src, t, s, old, hops, now))
+        if tts == k["tts"]:                 # not traced this round (many targets take turns): nothing new
+            return
+        k["tts"] = tts
         p = path_of(hops)
         if not path_of(k["hops"]):          # no route known yet: this one is the reference
             k["hops"] = hops
@@ -1343,7 +1444,7 @@ class Alerter:
         if not self.enabled():
             return
         with db_open(path) as db:
-            last = dict(db.execute("SELECT source, MAX(ts) FROM ping GROUP BY source"))
+            last = last_rounds(db)
         for name in Handler.sources[1:]:
             quiet = last.get(name) is None or now - last[name] > 3 * STEP
             was = self.silent.setdefault(name, quiet)
@@ -1493,7 +1594,7 @@ class Handler(BaseHTTPRequestHandler):
     targets = []
     sources = ["local"]     # this probe first, then the agents
     agents = {}             # name -> {token, url}
-    metrics_cache = (0, "")
+    metrics_cache = (0, None, "")
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -1532,12 +1633,12 @@ class Handler(BaseHTTPRequestHandler):
                     rng = int(q.get("range", 86400))
                     rng = rng if rng in BOARD_BUCKET else 86400
                     key = (src, rng)
-                    with BOARD_LOCK:        # many viewers, one computation per 20 s (60 s for a week)
-                        at, body = BOARD_CACHE.get(key, (0, None))
-                        if now - at >= (60 if rng > 86400 else 20):
+                    with BOARD_LOCKS.setdefault(key, threading.Lock()):  # many viewers, one computation
+                        at, ver, body = BOARD_CACHE.get(key, (0, None, None))
+                        if ver != (version := last_rounds(db)) or now - at >= STEP:     # a new round, or time moved
                             body = json.dumps(board(db, self.sources, src, self.targets, rng, now),
                                               separators=(",", ":")).encode()
-                            BOARD_CACHE[key] = (now, body)
+                            BOARD_CACHE[key] = (now, version, body)
                     return self.send(200, body, "application/json")
                 if u.path == "/api/minis":
                     rng = int(q.get("range", 86400))
@@ -1592,11 +1693,11 @@ class Handler(BaseHTTPRequestHandler):
             given = self.headers.get("Authorization", "").removeprefix("Bearer ").encode()
             if not METRICS_TOKEN or not hmac.compare_digest(given, METRICS_TOKEN.encode()):
                 return self.send(401, b"set METRICS_TOKEN and send it as a bearer token\n", "text/plain")
-        at, text = Handler.metrics_cache
-        if now - at >= 30:
-            with db_open(self.db) as db:
+        at, ver, text = Handler.metrics_cache
+        with db_open(self.db) as db:
+            if ver != (version := last_rounds(db)) or now - at >= STEP:     # once per round, however often scraped
                 text = metrics(db, self.sources, self.targets, now)
-            Handler.metrics_cache = (now, text)
+                Handler.metrics_cache = (now, version, text)
         self.send(200, text.encode(), "text/plain; version=0.0.4")
 
     def agent(self):
@@ -1872,7 +1973,7 @@ def after_round(db, a):
 
 
 def main():
-    global PASSWORD, METRICS_TOKEN, PUBLIC_URL, ASN_LOOKUP, LOSS_WARN, LOSS_CRIT, ALERTS
+    global PASSWORD, METRICS_TOKEN, PUBLIC_URL, ASN_LOOKUP, LOSS_WARN, LOSS_CRIT, ALERTS, TRACE_PARALLEL
     env = os.environ.get
     ap = argparse.ArgumentParser(description="SmokePing-style latency + mtr traceroutes")
     ap.add_argument("--targets", type=Path, default=Path(env("TARGETS", HERE / "targets.ini")))
@@ -1895,6 +1996,7 @@ def main():
     PUBLIC_URL = (env("PUBLIC_URL") or "").rstrip("/") or None
     ASN_LOOKUP = env("ASN", "1") != "0"
     LOSS_WARN, LOSS_CRIT = float(env("LOSS_WARN", LOSS_WARN)), float(env("LOSS_CRIT", LOSS_CRIT))
+    TRACE_PARALLEL = _int(int(env("TRACE_PARALLEL", TRACE_PARALLEL)), 1, 64)
     ALERTS = Alerter(env("DISCORD_WEBHOOK"), env("NTFY_URL"), env("WEBHOOK_URL"), routes=env("ALERT_ROUTES", "1") != "0")
     if a.import_rrd:
         return import_rrd(a)
@@ -1937,6 +2039,8 @@ def main():
                                                  after_round(db, a)), daemon=True).start()
         if ASN_LOOKUP:
             threading.Thread(target=asn_namer, args=(db,), daemon=True).start()
+        threading.Thread(target=fill_paths, args=(db, [(s, t["id"]) for s in Handler.sources for t in Handler.targets]),
+                         daemon=True).start()
         Handler.db = db
 
     extras = [x for x, on in (("sign-in", PASSWORD), ("alerts", ALERTS.enabled()), ("metrics token", METRICS_TOKEN)) if on]

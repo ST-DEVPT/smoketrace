@@ -376,7 +376,7 @@ Click any moment (or <kbd>←</kbd> <kbd>→</kbd> and <kbd>Enter</kbd>) for its
 flowchart LR
   T["targets.ini or<br>SmokePing's config"] --> R{{"every 5 minutes"}}
   R --> F["latency: fping -C 20,<br>TCP connects, DNS queries"]
-  R --> M["mtr --json -z<br>one per target, in parallel"]
+  R --> M["mtr --json -z<br>16 at once"]
   F --> DB[("SQLite<br>30 days")]
   M --> DB
   AG["Agents at other sites<br>same probes, same minutes"] -- "push, or pulled by the server" --> DB
@@ -392,6 +392,10 @@ flowchart LR
   consecutive replies) and the 20 sorted replies for the smoke.
 - **The same route** means the same IP at every TTL. A silent hop matches anything, so routers that skip ICMP
   now and then do not fake a change.
+- **Hundreds of targets.** At most 16 mtr run at once (`TRACE_PARALLEL`): each one's raw socket sees every ICMP
+  reply of the others, so the CPU they need grows with the square of how many run together. When the targets do
+  not all fit in a round, each is traced in turn every few rounds, and a target that lost packets is traced the
+  next round as well, while there is room. The dashboard and `/metrics` are computed once per round, whoever asks and however often.
 - **AS numbers** come from mtr (`-z`, which asks Team Cymru over DNS); their names are looked up once and kept.
   `ASN=0` turns both off.
 - **Rows, not RRD.** Raw rounds stay in SQLite for 30 days; longer chart ranges are bucketed as they are read
@@ -433,6 +437,7 @@ Every option is an environment variable (and a flag):
 | `LOSS_WARN`, `LOSS_CRIT` | `10`, `20` | loss limits in % (per target with SmokePing's config) |
 | `METRICS_TOKEN` | none | bearer token for `/metrics` |
 | `ASN` | `1` | `0`: no AS lookups |
+| `TRACE_PARALLEL` | `16` | mtr at once at most (1 to 64); fewer use less CPU, more trace every target more often |
 | `DB` | `/data/smoketrace.db` in the image | the SQLite database |
 | `BIND`, `PORT` | `0.0.0.0` in the image (else `127.0.0.1`), `8099` | where the server listens |
 | `SERVER` | none | agent: push to this server |

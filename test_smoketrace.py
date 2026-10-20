@@ -65,12 +65,18 @@ def test_fping_timeout():
     assert st.fping_timeout(100000) <= st.STEP - 10                   # never past the next round
 
 
-def test_trace_workers():
-    assert st.trace_workers(10) == 8                                   # few targets: the old pool
-    n = 555
-    w = st.trace_workers(n)
-    assert math.ceil(n / w) * (st.MTR_CYCLES + 5) <= st.STEP          # every trace of a round fits in the step
-    assert st.trace_workers(100000) == 64                              # capped
+def test_trace_plan():
+    ts = 1_000_200
+    few = [target(f"t{i}", f"10.0.0.{i}") for i in range(10)]
+    assert st.trace_plan(few, ts) == few and st.trace_workers(10) == 4         # few targets: all, every round
+    many = [target(f"t{i:03d}", f"10.0.{i // 250}.{i % 250}") for i in range(555)]
+    room, w = st.trace_capacity(), st.trace_workers(st.trace_capacity())
+    assert w == st.TRACE_PARALLEL and math.ceil(room / w) * (st.MTR_CYCLES + 5) <= st.STEP   # a round's traces fit
+    plans = [st.trace_plan(many, ts + r * st.STEP, lossy={"t554"}) for r in range(8)]
+    assert all(len(p) <= room and "t554" in {t["id"] for t in p} for p in plans)   # lossy ones every round
+    k = math.ceil(555 / (room * 3 // 4))
+    assert len({t["id"] for p in plans[:k] for t in p}) == 555                       # everyone within k rounds
+    assert st.lost({"a": [1.0, None], "b": [1.0, 2.0]}) == {"a"}
 
 
 def test_parse_fping():
@@ -123,11 +129,13 @@ def test_route_segments():
     A = [hop(1, "a"), hop(2, "b"), hop(3, "c")]
     A_silent = [hop(1, "a"), hop(2, None, 100), hop(3, "c"), hop(4, None, 100)]   # silent mid + trailing hop
     B = [hop(1, "a"), hop(2, "x"), hop(3, "c")]
-    segs, known = st.route_segments([(0, A), (300, A_silent), (600, B), (900, A)])
+    segs, known = st.route_segments([(ts, st.path_key(h)) for ts, h in ((0, A), (300, A_silent), (600, B), (900, A))])
     assert [s["route"] for s in segs] == [0, 1, 0]           # silent hops are not a change; A comes back as A
     assert [(s["from"], s["to"], s["end"]) for s in segs] == [(0, 300, 600), (600, 600, 900), (900, 900, 1200)]
     assert known == [["a", "b", "c"], ["a", "x", "c"]]
     assert not st.same_path(["a", "b"], ["a", "b", "c"])     # different hop count = different route
+    assert st.split_path(st.path_key(A_silent)) == st.path_of(A_silent) == ["a", None, "c"]
+    assert st.split_path(st.path_key([hop(1, None, 100)])) == []
 
 
 def test_loss_origin():
@@ -384,7 +392,7 @@ def test_trace_detail_compares_previous_route():
     with tempfile.TemporaryDirectory() as d:
         db = Path(d, "t.db")
         st.init_db(db, "local")
-        st.store(db, [], [("local", "t", ts, json.dumps(h)) for ts, h in ((0, A), (300, A), (600, B), (900, B))], 900)
+        st.store(db, [], [("local", "t", ts, json.dumps(h), st.path_key(h)) for ts, h in ((0, A), (300, A), (600, B), (900, B))], 900)
         with st.db_open(db) as c:
             assert sorted(r[0] for r in c.execute("SELECT asn FROM asn WHERE name IS NULL")) == ["AS1", "AS2"]
             c.execute("UPDATE asn SET name='ONE - First Net' WHERE asn='AS1'")
@@ -413,6 +421,30 @@ def test_old_database_is_upgraded():
         with st.db_open(db) as c:
             assert c.execute("SELECT * FROM ping").fetchall() == [("home", "t", 300, 10.0, 0.0, 1.0, "[10.0]")]
             assert c.execute("SELECT source, target, ts FROM trace").fetchall() == [("home", "t", 300)]
+
+
+def test_upgrade_from_0_5_indexes_routes_and_rounds():
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d, "old.db")
+        with st.db_open(db) as c:   # the 0.2 to 0.5 schema: no path table, no rounds table
+            c.execute("CREATE TABLE ping (source TEXT, target TEXT, ts INTEGER, median REAL, loss REAL, jitter REAL,"
+                      " rtts TEXT, PRIMARY KEY (source, target, ts)) WITHOUT ROWID")
+            c.execute("CREATE TABLE trace (source TEXT, target TEXT, ts INTEGER, hops TEXT,"
+                      " PRIMARY KEY (source, target, ts)) WITHOUT ROWID")
+            c.execute("INSERT INTO ping VALUES ('local', 't', 300, 10.0, 0.0, 1.0, '[10.0]')")
+            c.execute("INSERT INTO trace VALUES ('local', 't', 300, ?)", (json.dumps([hop(1, "a"), hop(2, None, 100), hop(3, "c")]),))
+        st.init_db(db, "local")
+        st.store(db, *st.round_rows("local", 600, {"t": [10.0]}, {"t": [hop(1, "a"), hop(2, "b"), hop(3, "c")]}), 600)
+        st.fill_paths(db, [("local", "t"), ("local", "gone")])
+        st.fill_paths(db, [("local", "t")])          # nothing left to do
+        with st.db_open(db) as c:
+            assert st.load_paths(c, "local", "t") == [(300, "a,,c"), (600, "a,b,c")]
+            assert st.last_rounds(c) == {"local": 600}
+            assert [s["route"] for s in st.route_segments(st.load_paths(c, "local", "t"))[0]] == [0]   # silent hop
+        st.store(db, *st.round_rows("local", 600 + 31 * 86400, {"t": [10.0]}, {}), 600 + 31 * 86400)
+        with st.db_open(db) as c:                    # a month later: the old rows are gone, target by target
+            assert c.execute("SELECT COUNT(*) FROM trace").fetchone()[0] == 0
+            assert c.execute("SELECT COUNT(*) FROM path").fetchone()[0] == 0
 
 
 def test_clean_round():
@@ -528,7 +560,7 @@ def test_sign_in_and_metrics():
     with tempfile.TemporaryDirectory() as d:
         db, srv, url = server_with(d)
         st.PASSWORD, st.METRICS_TOKEN = "correct horse", "metrics-" + TOKEN
-        st.Handler.metrics_cache = (0, "")
+        st.Handler.metrics_cache = (0, None, "")
         try:
             now = int(time.time())
             st.store(db, *st.round_rows("local", now // 300 * 300, {"t": [10.0, 12.0, None, 11.0]}, {}), now)

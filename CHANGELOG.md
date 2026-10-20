@@ -2,6 +2,27 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.6.0] - 2026-10-20
+
+Hundreds of targets, measured on 555 with a week of history:
+
+- **Less CPU for traceroutes.** At most 16 mtr run at once (`TRACE_PARALLEL`, was up to 64): each one's raw
+  socket receives every ICMP reply of all the others, so their CPU grew with the square of how many ran
+  together. When the targets do not all fit in a round, each is traced in turn every few rounds, and a target
+  that lost packets is traced the next round as well. Route-change alerts count new traces only.
+- **The dashboard is computed once per round**, not every 20 seconds per viewer, and so is `/metrics` however
+  often it is scraped. Computing it is faster too: 24 hours went from 7 s to 0.6 s, a week from 26 s to 2.5 s,
+  `/metrics` from 4.6 s to 0.7 s. Routes are kept in a narrow table of their own, so reading a week of routes no
+  longer reads (and parses) every traceroute.
+- **Storing a round** went from 1.8 s to under 0.3 s: old rows are removed target by target along the
+  primary key, and the full sweep for removed targets runs once a day.
+- **The table view** adds rows as they scroll into view (it took ~300 ms to draw 555 rows on every refresh),
+  and a refresh keeps the table's scroll position.
+- **Fixed**: a view choice saved by an older version (`view` in the browser's storage) drew the heatmap of the
+  group shown before instead of the current one. Saved choices are now checked.
+- Upgrading adds two tables; traces already stored get their route in the background after the start (about
+  half a minute per million traces).
+
 ## [0.5.0] - 2026-10-20
 
 - **A dashboard for many targets.** The overview is organised by your groups (SmokePing's tree or the sections of
