@@ -40,7 +40,7 @@ jobs:
           import json, urllib.request
           get = lambda p: json.load(urllib.request.urlopen("http://127.0.0.1:8099" + p))
           ov = {t["name"]: t for t in get("/api/overview")["targets"]}
-          assert len(ov) == 7 and ov["VPS Frankfurt"]["status"] == "down", ov
+          assert len(ov) == 55 and ov["VPS Frankfurt"]["status"] == "down", ov
           assert ov["Shop (HTTPS)"]["probe"] == "tcp" and ov["Shop (HTTPS)"]["port"] == 443
           assert ov["VPS Frankfurt"]["by_source"] == {"local": "down", "porto": "down"}, ov
           assert get(f"/api/overview?src=porto")["source"] == "porto"
@@ -51,11 +51,13 @@ jobs:
           tr = get(f"/api/trace?id={cf}")
           assert (tr["cur"]["label"], tr["prev"]["label"]) == ("A", "B")
           assert {r["state"] for r in tr["rows"]} >= {"same", "changed"}, tr["rows"]
+          b = get("/api/board?range=86400")
+          assert any(len(c["targets"]) == 9 and c["hop"]["ip"] == "100.70.42.1" for c in b["clusters"]), b["clusters"]
           print("demo ok")
           EOF
       - name: The page's script parses
         run: |
-          python -c "import re; s = open('index.html', encoding='utf-8').read(); open('page.js', 'w', encoding='utf-8').write(re.search(r'<script>(.*)</script>', s, re.S).group(1))"
+          python -c "import re; s = open('index.html', encoding='utf-8').read(); open('page.js', 'w', encoding='utf-8').write(';'.join(re.findall(r'<script>(.*?)</script>', s, re.S)))"
           node --check page.js
       - name: The Grafana dashboard is valid JSON
         run: python -m json.tool docs/grafana.json > /dev/null
@@ -163,6 +165,8 @@ jobs:
           cat ov.json edge.json; exit 1
       - name: Prometheus metrics
         run: curl -fs 127.0.0.1:8099/metrics | tee metrics.txt | grep -q 'smoketrace_median_seconds{target="lan-loopback"'
+      - name: The page and its fonts are in the image
+        run: curl -fs 127.0.0.1:8099/ | grep -q "<title>smoketrace</title>" && curl -fsI 127.0.0.1:8099/fonts/archivo.woff2 | grep -qi "font/woff2"
       - name: Docker reports the server healthy
         run: |
           for i in $(seq 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' server)" = healthy ] && exit 0; sleep 2; done
