@@ -156,6 +156,25 @@ with sync_playwright() as p:
     r = pg.evaluate("[S.view, HROWS.filter(r => r.x).every(r => shownList().some(x => x.id === r.x.id))]")
     check("an old saved view falls back to the heatmap", r == ["heat", True], r)
 
+    # 12. every site at once by default; one site when picked; a target shows its worst site and all of them
+    pg.evaluate("localStorage.removeItem('src')")
+    pg.goto(URL + "/#/")
+    pg.reload()
+    pg.wait_for_function("S.b && S.b.source === 'all'")
+    r = pg.evaluate("[...document.querySelectorAll('.head-meta [data-src]')].map(b => b.dataset.src + ':' + b.getAttribute('aria-pressed'))")
+    check("All is the default, before each site", r == ["all:true", "local:false", "porto:false"], r)
+    pg.click(".head-meta [data-src=porto]")
+    pg.wait_for_function("S.b.source === 'porto'")
+    pg.click(".head-meta [data-src=all]")
+    pg.wait_for_function("S.b.source === 'all'")
+    worst = pg.evaluate("S.b.targets.find(x => x.status === 'crit').id")
+    pg.evaluate(f"openTarget('{worst}')")
+    pg.wait_for_function("S.det && S.cmp")
+    r = pg.evaluate(f"[S.det.source === S.b.targets.find(x => x.id === '{worst}').src, S.cmp.sources.length]")
+    check("a target in All shows its worst site with every site on the chart", r == [True, 2], r)
+    pg.keyboard.press("Escape")
+    pg.wait_for_function("!S.id")
+
     check("no page errors", not errors, errors)
     b.close()
 

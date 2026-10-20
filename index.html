@@ -419,7 +419,7 @@ const I18N = {
     ok: "OK", warn: "Warning", crit: "Critical", down: "Down", stale: "No data",
     ago: (n, u) => `${n} ${u} ago`, updated: a => `Updated ${a}`, offlineLive: "Offline",
     offline: "No connection to smoketrace. What you see may be out of date.", retry: "Retry now",
-    search: "Target, group or IP", groups: "Groups", all: "All targets", seenFrom: "Seen from", overview: "Overview", targetsH: "Targets",
+    search: "Target, group or IP", groups: "Groups", all: "All targets", seenFrom: "Seen from", allSites: "All", allSitesT: "every site: each target shows the site where it is worst", allSitesS: "every site", overview: "Overview", targetsH: "Targets",
     nTargets: n => pl(n, "target", "targets"), reporting: (a, b) => `${a} of ${b} sites reporting`, lastRoundAgo: a => `last round ${a}`, every: d => `a round every ${d}`, traceEvery: d => `traceroutes every ${d}`,
     colourBy: "Colour by", usualK: "Usual", menu: "Groups",
     health: "OK", downK: "Down", degraded: "Degraded", noDataK: "No data", degradedS: (w, c) => `${w} warning · ${c} critical`,
@@ -501,7 +501,7 @@ const I18N = {
     ok: "OK", warn: "Aviso", crit: "Crítico", down: "Em baixo", stale: "Sem dados",
     ago: (n, u) => `há ${n} ${u}`, updated: a => `Atualizado ${a}`, offlineLive: "Sem ligação",
     offline: "Sem ligação ao smoketrace. Os dados mostrados podem estar desatualizados.", retry: "Tentar agora",
-    search: "Alvo, grupo ou IP", groups: "Grupos", all: "Todos os alvos", seenFrom: "Visto de", overview: "Visão geral", targetsH: "Alvos",
+    search: "Alvo, grupo ou IP", groups: "Grupos", all: "Todos os alvos", seenFrom: "Visto de", allSites: "Todos", allSitesT: "todos os locais: cada alvo mostra o local onde está pior", allSitesS: "todos os locais", overview: "Visão geral", targetsH: "Alvos",
     nTargets: n => pl(n, "alvo", "alvos"), reporting: (a, b) => `${a} de ${b} locais a reportar`, lastRoundAgo: a => `última ronda ${a}`, every: d => `uma ronda a cada ${d}`, traceEvery: d => `traceroutes a cada ${d}`,
     colourBy: "Cor por", usualK: "Normal", menu: "Grupos",
     health: "OK", downK: "Em baixo", degraded: "Degradados", noDataK: "Sem dados", degradedS: (w, c) => `${w} aviso · ${c} crítico`,
@@ -639,7 +639,11 @@ const S = {
 // week-long board, a refresh or a range clicked twice can never paint over what the page now asks for
 const REQ = { board: 0, det: 0, trace: 0, tg: 0 };
 const byId = () => new Map((S.b?.targets || []).map(x => [x.id, x]));
-const qsrc = () => S.src ? `&src=${encodeURIComponent(S.src)}` : "";
+const ALL = "all";
+// the site whose figures a target shows: the one picked, or with every site at once the one where it is worst
+const srcFor = id => S.src === ALL ? byId().get(id)?.src || S.b?.sources[0]?.name || "" : S.src;
+const cmpOn = () => S.showCmp || S.src === ALL;     // every site at once: every site on the chart too
+const qsrc = id => { const s = srcFor(id); return s ? `&src=${encodeURIComponent(s)}` : ""; };
 
 async function api(path) {
   const r = await fetch(path, { cache: "no-store" });
@@ -759,7 +763,7 @@ const toOverview = () => S.fromDash ? history.back() : (location.hash = S.dash);
 const liveHtml = () => `<span class="live ${S.offline ? "off" : ""}" id="live"><i></i><span id="updated">${updText()}</span></span>`;
 function srcSeg() {
   const srcs = S.b?.sources || [];
-  return srcs.length < 2 ? "" : `<span class="seg" role="group" aria-label="${t("seenFrom")}">${srcs.map(s => {
+  return srcs.length < 2 ? "" : `<span class="seg" role="group" aria-label="${t("seenFrom")}"><button data-src="${ALL}" aria-pressed="${S.src === ALL}" title="${t("seenFrom")} ${t("allSitesT")}">${t("allSites")}</button>${srcs.map(s => {
     const late = !s.last_ts || S.b.now - s.last_ts > 3 * S.b.step;
     return `<button data-src="${esc(s.name)}" aria-pressed="${s.name === S.src}" title="${t("seenFrom")} ${esc(s.name)}">${late ? icon("stale") : ""}${esc(s.name)}</button>`;
   }).join("")}</span>`;
@@ -1024,7 +1028,7 @@ function kpis(sc) {
 function finding(sc) {
   const b = S.b, ids = new Set(sc.map(x => x.id)), c = counts(sc), bad = c.down + c.crit + c.warn;
   if (sc.length && c.stale === sc.length) return t("fStale", dur(3 * b.step));
-  if (!bad) return t("fClear", sc.length, b.sources.length > 1 ? esc(S.src) : "");
+  if (!bad) return t("fClear", sc.length, b.sources.length > 1 ? (S.src === ALL ? t("allSitesS") : esc(S.src)) : "");
   const out = [t("fBad", bad, sc.length)];
   const k = b.clusters.map(x => ({ ...x, n: x.targets.filter(id => ids.has(id)).length })).filter(x => x.n > 1).sort((a, z) => z.n - a.n)[0];
   if (b.local && bad > 1) out.push(t("fLocal", esc(b.local)));
@@ -1309,8 +1313,11 @@ async function fetchMinis() {
   if (!wantMinis.size) return;
   const ids = [...wantMinis].slice(0, 120);
   ids.forEach(i => wantMinis.delete(i));
+  const bySrc = new Map();               // with every site at once, each target's line comes from its own site
+  for (const id of ids) { const s = srcFor(id); if (!bySrc.has(s)) bySrc.set(s, []); bySrc.get(s).push(id); }
   try {
-    Object.assign(S.minis, await api(`/api/minis?range=${S.range}${qsrc()}&ids=${ids.map(encodeURIComponent).join(",")}`));
+    for (const got of await Promise.all([...bySrc].map(([s, xs]) => api(`/api/minis?range=${S.range}${s ? `&src=${encodeURIComponent(s)}` : ""}&ids=${xs.map(encodeURIComponent).join(",")}`))))
+      Object.assign(S.minis, got);
     ids.forEach(id => { const el = document.querySelector(`[data-card="${CSS.escape(id)}"]`); if (el) drawMini(el); });
   } catch {}
 }
@@ -1347,6 +1354,7 @@ function problemsHtml(sc) {
     const x = m.get(p.id);
     if (!x) return "";
     const d = x.median != null && x.baseline ? x.median - x.baseline : 0, lines = [];
+    if (p.source) lines.push(`${t("seenFrom")} <b>${esc(p.source)}</b>`);
     if (x.status === "down") lines.push(`${t("cLoss")} <span class="mono">100${NB}%</span>`);
     else if (x.status !== "stale") lines.push(`${t("cLoss")} <span class="mono">${pct(x.loss)}</span> · ${t("cMedian")} <span class="mono">${msU(x.median)}</span>${d >= 2 ? ` <span class="dlt">+${ms(d)}</span>` : ""}`);
     if (p.hop) lines.push(`${p.hop.why === "loss" ? t("lossStarts") : t("stops")} ${p.hop.ttl} · <span class="mono">${esc(p.hop.ip)}</span>${p.hop.as_name ? " · " + esc(asName(p.hop.as_name)) : ""}`);
@@ -1359,7 +1367,7 @@ function problemsHtml(sc) {
   const top = probs.slice(0, 8);
   const body = !probs.length
     ? `<div class="clear"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m7.5 12.5 3 3 6-6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <div><b>${t("allClear")}</b><span>${t("allClearS", esc(S.src))}</span></div></div>`
+        <div><b>${t("allClear")}</b><span>${t("allClearS", S.src === ALL ? t("allSitesS") : esc(S.src))}</span></div></div>`
     : banners.join("") + top.map(card).join("") + (probs.length > top.length ? `<div class="muted" style="padding-top:10px">${t("andMore", probs.length - top.length)} · <button class="link" data-st="down,crit,warn,stale">${t("showAll")}</button></div>` : "");
   return `<div class="ph"><h2>${t("attention")}</h2><span class="grow"></span><span class="count mono">${probs.length}</span></div><div class="pb">${body}</div>`;
 }
@@ -1368,8 +1376,9 @@ function eventText(e, m) {
   if (e.kind === "back") return `${icon("ok")}<span class="tx"><b>${t("back", esc(e.source))}</b></span>`;
   const x = m.get(e.target);
   if (!x) return "";
-  if (e.kind === "route") return `${SWAP}<span class="tx"><b>${esc(x.name)}</b> <span>${t("route")} ${esc(e.from)}${ARROW}${esc(e.to)}</span></span>`;
-  return `${icon(e.to)}<span class="tx"><b>${esc(x.name)}</b> <span>${t(e.from)}${ARROW}${t(e.to)}</span></span>`;
+  const from = S.b.source === ALL && e.source ? ` <span class="dim">· ${esc(e.source)}</span>` : "";
+  if (e.kind === "route") return `${SWAP}<span class="tx"><b>${esc(x.name)}</b> <span>${t("route")} ${esc(e.from)}${ARROW}${esc(e.to)}${from}</span></span>`;
+  return `${icon(e.to)}<span class="tx"><b>${esc(x.name)}</b> <span>${t(e.from)}${ARROW}${t(e.to)}${from}</span></span>`;
 }
 function timelineHtml(sc) {
   const ids = new Set(sc.map(x => x.id)), m = byId();
@@ -1391,8 +1400,8 @@ function timelineHtml(sc) {
 async function loadDetail() {
   const id = S.id, tok = ++REQ.det, range = S.drange;
   try {
-    const d = await api(`/api/target?id=${encodeURIComponent(id)}&range=${range}${qsrc()}`);
-    const cmp = S.showCmp && (S.b?.sources.length || 0) > 1 ? await api(`/api/compare?id=${encodeURIComponent(id)}&range=${range}`) : null;
+    const d = await api(`/api/target?id=${encodeURIComponent(id)}&range=${range}${qsrc(id)}`);
+    const cmp = cmpOn() && (S.b?.sources.length || 0) > 1 ? await api(`/api/compare?id=${encodeURIComponent(id)}&range=${range}`) : null;
     if (tok !== REQ.det || S.id !== id) return;
     if (S.det?.points.length !== d.points.length) S.hover = null;
     S.det = d; S.cmp = cmp; S.detErr = null;
@@ -1406,7 +1415,7 @@ async function loadDetail() {
 async function loadTrace() {
   const id = S.id, sel = S.sel, tok = ++REQ.trace;
   try {
-    const tr = await api(`/api/trace?id=${encodeURIComponent(id)}&vs=${S.vs}${sel ? `&ts=${sel}` : ""}${qsrc()}`);
+    const tr = await api(`/api/trace?id=${encodeURIComponent(id)}&vs=${S.vs}${sel ? `&ts=${sel}` : ""}${qsrc(id)}`);
     if (tok !== REQ.trace || S.id !== id) return;
     S.trace = tr;
   } catch {
@@ -1444,7 +1453,7 @@ function renderDetail() {
       <details class="panel" id="rawd"><summary>${t("rawTitle")}</summary><div id="raw"></div></details>`;
   }
   for (const b of v.querySelectorAll("[data-drange]")) b.setAttribute("aria-pressed", +b.dataset.drange === S.drange);
-  $("#cmpbtn").innerHTML = (S.b?.sources.length || 0) > 1 ? `<button class="chip" data-act="cmp" aria-pressed="${S.showCmp}">${t("compare")}</button>` : "";
+  $("#cmpbtn").innerHTML = (S.b?.sources.length || 0) > 1 ? `<button class="chip" data-act="cmp" aria-pressed="${cmpOn()}" ${S.src === ALL ? "disabled" : ""}>${t("compare")}</button>` : "";
   const d = S.det;
   if (!d) { $("#dhead").innerHTML = `<div><nav class="crumbs"><a href="${S.dash}" data-act="overview">${t("overview")}</a></nav><h1 tabindex="-1">${esc(byId().get(S.id)?.name || t("loading"))}</h1><p class="lede"><span class="sk w3"></span></p></div>`; $("#dkpis").innerHTML = ""; drawChart(); renderTrace(); renderHops(); return; }
   const x = d.target, segs = d.segments, cur = segs[segs.length - 1], changes = segs.filter(s => s.change).length;
@@ -1464,7 +1473,7 @@ function renderDetail() {
     tile(3, t("curRoute"), cur ? `<span style="color:var(${routeVar(cur.route)})">${esc(cur.label)}</span><small>${t("hops", cur.hops)}</small>` : "—", cur ? t("sinceR", at(cur.from)) : t("noTrace")) +
     tile(4, t("changesK", rangeLbl), String(changes), changes ? t("lastAgo", at(segs.filter(s => s.change).pop().from)) : t("stableRoute"));
   const routes = [...new Map(segs.map(s => [s.route, s])).values()].sort((a, b) => a.route - b.route);
-  const others = S.showCmp && S.cmp ? S.cmp.sources.filter(s => s.name !== d.source) : [];
+  const others = cmpOn() && S.cmp ? S.cmp.sources.filter(s => s.name !== d.source) : [];
   $("#legend").innerHTML = `<span><i class="lg-line" style="--c:var(--accent)"></i>${t("cMedian")}${others.length ? ` · ${esc(d.source)}` : ""}</span>
     ${others.map((s, k) => `<span><i class="lg-line" style="--c:var(--src-${Math.min(k + 2, 3)})"></i>${esc(s.name)}</span>`).join("")}
     <span><i class="lg-smoke"></i>${t("smoke", d.pings)}</span>
@@ -1532,7 +1541,7 @@ function drawChart() {
   const { from, to, points: pts } = d;
   const X = ts => x0 + (ts - from) / (to - from) * pw;
   const bw = Math.max(1, d.bucket / (to - from) * pw);
-  const others = S.showCmp && S.cmp ? S.cmp.sources.filter(s => s.name !== d.source) : [];
+  const others = cmpOn() && S.cmp ? S.cmp.sources.filter(s => s.name !== d.source) : [];
   const tops = pts.map(p => p[4].length ? p[4][p[4].length - 1] : p[1]).filter(v => v != null).sort((a, b) => a - b);
   const meds = pts.map(p => p[1]).filter(v => v != null).concat(others.flatMap(s => s.points.map(p => p[1]).filter(v => v != null)));
   const p95 = tops.length ? tops[Math.floor((tops.length - 1) * .95)] : 1;
@@ -1612,7 +1621,7 @@ function chartTip(i, e) {
   const tip = $("#tip"), p = S.det?.points[i];
   if (!p || !S.geo) { tip.hidden = true; return; }
   const seg = segAt(p[0]), s = p[4];
-  const others = S.showCmp && S.cmp ? S.cmp.sources.filter(x => x.name !== S.det.source) : [];
+  const others = cmpOn() && S.cmp ? S.cmp.sources.filter(x => x.name !== S.det.source) : [];
   const near = list => { let best = null; for (const q of list) if (Math.abs(q[0] - p[0]) <= S.det.bucket && (!best || Math.abs(q[0] - p[0]) < Math.abs(best[0] - p[0]))) best = q; return best; };
   tip.innerHTML = `<b>${at(p[0])}</b>${S.det.bucket > 300 ? ` <span class="muted">· ${Math.round(S.det.bucket / 60)} min</span>` : ""}
     <dl><dt>${t("cMedian")}</dt><dd>${msU(p[1])}</dd>

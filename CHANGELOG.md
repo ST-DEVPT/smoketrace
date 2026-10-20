@@ -2,6 +2,14 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.10.0] - 2026-10-21
+
+- **Every site on one page.** With agents, *Seen from* starts with **All**, now the default: each target shows
+  the status of the site where it is worst, with that site's latency and loss, and a heatmap cell is the worst any
+  site saw. The problems say which site sees each one, the timeline says where each change happened, and a target's
+  page shows its worst site with every site drawn on the chart. Picking *home*, *porto* or another site shows the
+  targets from there only, as before; the choice is remembered.
+
 ## [0.9.0] - 2026-10-21
 
 - **Edit a target where you see it.** With `PASSWORD` set, a target's page has an *Edit* button, the table and the

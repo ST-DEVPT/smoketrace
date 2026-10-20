@@ -181,7 +181,9 @@ openssl rand -hex 24
 docker compose -f docker-compose.agent.yml up -d
 ```
 
-After its first round, *porto* appears under **Seen from** at the top of the page.
+After its first round, *porto* appears under **Seen from** at the top of the page. **All**, the default, shows
+every site at once: each target takes the status of the site where it is worst, with that site's figures, and its
+page draws every site on the chart. Pick a site to see the targets from there only.
 
 `AGENTS` goes on the **server** (its list of sites); `TOKEN` and `SERVER` go on the **agent**. If the agent cannot
 reach the server but the server can reach the agent, turn it around: on the agent replace `SERVER` with

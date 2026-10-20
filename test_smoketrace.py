@@ -106,6 +106,31 @@ def test_trace_step():
     assert lossy.fresh == {"b"}                # "a" kept losing: traced in its turn, not every round
 
 
+def test_merge_boards():
+    def row(tid, status, sev, med, rc=(), changes=0):
+        return {"id": tid, "status": status, "sev": sev, "med": med, "cl": [0, 50 if "2" in sev else 0], "rc": list(rc),
+                "route_changes": changes, "last_change": 100 if changes else None, "median": med[-1], "by_source": None}
+
+    def brd(src, rows, problems=(), events=(), local=None):
+        return {"source": src, "cells": 2, "targets": rows, "problems": list(problems), "events": list(events),
+                "local": local, "clusters": [], "fleet": [None, None], "step": 300}
+
+    hop = {"ip": "10.9.9.9", "ttl": 3}
+    home = brd("home", [row("a", "ok", "00", [5, 5]), row("b", "stale", "..", [None, None])],
+               events=[{"ts": 5, "kind": "quiet", "source": "porto"}])
+    porto = brd("porto", [row("a", "crit", "02", [9, 30], rc=[1], changes=1), row("b", "ok", ".0", [None, 7])],
+                problems=[{"id": "a", "status": "crit", "hop": hop}],
+                events=[{"ts": 9, "kind": "status", "target": "a", "from": "ok", "to": "crit"},
+                        {"ts": 5, "kind": "quiet", "source": "porto"}])
+    m = st.merge_boards([home, porto])
+    a, b = (next(x for x in m["targets"] if x["id"] == i) for i in "ab")
+    assert m["source"] == "all" and a["status"] == "crit" and a["src"] == "porto" and a["median"] == 30   # the worst site
+    assert a["sev"] == "02" and a["cl"] == [0, 50] and a["rc"] == [1] and a["route_changes"] == 1
+    assert b["status"] == "ok" and b["src"] == "porto" and b["sev"] == ".0"      # no data from home: porto's answer
+    assert m["problems"] == [{"id": "a", "status": "crit", "hop": hop, "source": "porto"}]
+    assert [e["kind"] for e in m["events"]] == ["status", "quiet"] and m["events"][0]["source"] == "porto"   # quiet once
+
+
 def test_new_agents_probe_every_target():
     ts = [target("a", slaves=["porto"]), target("b", slaves=[]), target("c")]
     assert st.add_new_agents(ts, ["porto", "lisboa"], None) == ["lisboa"]       # porto is named, lisboa is new

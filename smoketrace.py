@@ -44,7 +44,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.9.0"           # the top of CHANGELOG.md says the same; a test checks
+VERSION = "0.10.0"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
@@ -1331,7 +1331,7 @@ def trace_detail(db, src, tid, ts, vs):
 
 SEVERITY = {"ok": 0, "warn": 1, "crit": 2, "down": 3}
 BOARD_BUCKET = {6 * 3600: 300, 86400: 900, 7 * 86400: 7200}      # heatmap cell per range: 72, 96, 84 cells
-BOARD_CACHE = {}            # (source, range) -> (computed at, data version, body)
+BOARD_CACHE = {}            # (source or "all", range) -> (computed at, data version, board, its JSON)
 EDIT_LOCK = threading.Lock()
 BOARD_LOCKS = {}
 
@@ -1452,12 +1452,7 @@ def board(db, sources, src, targets, rng, now):
             problems.append({"id": t["id"], "status": st, "since": since,
                              "hop": hop_info(db, last_trace(db, src, t["id"])) if segs and st != "stale" else None,
                              "elsewhere": {k: v for k, v in (by or {}).items() if k != src}})
-    points = {}
-    for pr in problems:
-        if pr["hop"] and pr["hop"]["ip"]:
-            points.setdefault(pr["hop"]["ip"], []).append(pr)
-    clusters = sorted(({"hop": prs[0]["hop"], "targets": [x["id"] for x in prs]}
-                       for prs in points.values() if len(prs) > 1), key=lambda c: -len(c["targets"]))
+    clusters = clusters_of(problems)
     local = None
     hurt = [pr for pr in problems if pr["status"] != "stale"]
     if len(sources) > 1 and out and len(hurt) >= 2 and len(hurt) / len(out) >= 0.5:
@@ -1477,6 +1472,51 @@ def board(db, sources, src, targets, rng, now):
             "fleet": [round(statistics.median(f), 1) if f else None for f in fleet],
             "problems": problems, "clusters": clusters, "local": local, "events": events,
             "loss_warn": LOSS_WARN, "loss_crit": LOSS_CRIT}
+
+
+def clusters_of(problems):
+    """Problems whose traceroutes point at the same hop, most targets first."""
+    points = {}
+    for pr in problems:
+        if pr["hop"] and pr["hop"]["ip"]:
+            points.setdefault(pr["hop"]["ip"], []).append(pr)
+    return sorted(({"hop": prs[0]["hop"], "targets": [x["id"] for x in prs]}
+                   for prs in points.values() if len(prs) > 1), key=lambda c: -len(c["targets"]))
+
+
+ALL = "all"     # the board of every site at once
+
+
+def merge_boards(boards):
+    """The board of every site at once. Per target: the worst status among the sites that probe it, with that
+    site's figures (so the numbers explain the colour) in `src`; per heatmap cell the worst severity and loss of
+    any site; route changes from all of them. Problems and events say which site saw them."""
+    order = {b["source"]: i for i, b in enumerate(boards)}
+    seen = {}
+    for b in boards:
+        for x in b["targets"]:
+            seen.setdefault(x["id"], []).append((b["source"], x))
+    worst = lambda sx: (sx[1]["status"] != "stale", SEVERITY.get(sx[1]["status"], 0), -order[sx[0]])
+    cellmax = lambda strs: "".join(max(cs) for cs in zip(*strs))     # "." (no data) < "0" < "3": the worst wins
+    targets, rep = [], {}
+    for tid, xs in seen.items():
+        src, x = max(xs, key=worst)
+        rep[tid] = src
+        changes = [y["last_change"] for _, y in xs if y["last_change"]]
+        targets.append({**x, "src": src, "sev": cellmax([y["sev"] for _, y in xs]),
+                        "cl": [max(c) for c in zip(*(y["cl"] for _, y in xs))],
+                        "rc": sorted({i for _, y in xs for i in y["rc"]}),
+                        "route_changes": sum(y["route_changes"] for _, y in xs),
+                        "last_change": max(changes) if changes else None})
+    problems = [{**pr, "source": b["source"]} for b in boards for pr in b["problems"] if rep.get(pr["id"]) == b["source"]]
+    events = [e if e.get("source") else {**e, "source": b["source"]}
+              for k, b in enumerate(boards) for e in b["events"] if k == 0 or e["kind"] not in ("quiet", "back")]
+    nb = boards[0]["cells"]
+    fleet = [[x["med"][i] for x in targets if x["med"][i] is not None] for i in range(nb)]
+    local = [b["local"] for b in boards if b["local"]]
+    return {**boards[0], "source": ALL, "targets": targets, "problems": problems, "clusters": clusters_of(problems),
+            "local": ", ".join(local) or None, "events": sorted(events, key=lambda e: -e["ts"])[:500],
+            "fleet": [round(statistics.median(f), 1) if f else None for f in fleet]}
 
 
 def minis(db, src, ids, targets, rng, now):
@@ -1784,8 +1824,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.redirect("/login")
             if u.path in ("/", "/index.html"):
                 return self.send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
-            src = q.get("src") or self.sources[0]
-            if src not in self.sources:
+            src = q.get("src") or (ALL if u.path == "/api/board" and len(self.sources) > 1 else self.sources[0])
+            if src == ALL and u.path != "/api/board":
+                src = self.sources[0]           # one site's figures; the page asks for the right one
+            if src not in self.sources and src != ALL:
                 raise ValueError(src)
             t = next((x for x in self.targets if x["id"] == q.get("id")), None)
             with db_open(self.db) as db:
@@ -1796,14 +1838,7 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path == "/api/board":
                     rng = int(q.get("range", 86400))
                     rng = rng if rng in BOARD_BUCKET else 86400
-                    key = (src, rng)
-                    with BOARD_LOCKS.setdefault(key, threading.Lock()):  # many viewers, one computation
-                        at, ver, body = BOARD_CACHE.get(key, (0, None, None))
-                        if ver != (version := last_rounds(db)) or now - at >= STEP:     # a new round, or time moved
-                            body = json.dumps(board(db, self.sources, src, self.targets, rng, now),
-                                              separators=(",", ":")).encode()
-                            BOARD_CACHE[key] = (now, version, body)
-                    return self.send(200, body, "application/json")
+                    return self.send(200, self.board(db, src, rng, now)[1], "application/json")
                 if u.path == "/api/minis":
                     rng = int(q.get("range", 86400))
                     ids = set(q.get("ids", "").split(",")[:150])
@@ -1853,6 +1888,18 @@ class Handler(BaseHTTPRequestHandler):
         store(self.db, *round_rows(name, ts, pings, traces), now)
         ALERTS.check(self.db, name)
         self.json({"ok": True})
+
+    def board(self, db, src, rng, now):
+        """-> (board, its JSON), computed once per round however many viewers ask; "all" merges every site's."""
+        key = (src, rng)
+        with BOARD_LOCKS.setdefault(key, threading.Lock()):     # many viewers, one computation
+            at, ver, data, body = BOARD_CACHE.get(key, (0, None, None, None))
+            if ver != (version := last_rounds(db)) or now - at >= STEP:     # a new round, or time moved
+                data = (merge_boards([self.board(db, s, rng, now)[0] for s in self.sources]) if src == ALL
+                        else board(db, self.sources, src, self.targets, rng, now))
+                body = json.dumps(data, separators=(",", ":")).encode()
+                BOARD_CACHE[key] = (now, version, data, body)
+        return data, body
 
     def target_list(self):
         why = editable_why()
