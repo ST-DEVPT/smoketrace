@@ -2,6 +2,23 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.8.0] - 2026-10-21
+
+- **Edit targets on the page.** A *Targets* page lists every target by group, and with `PASSWORD` set you can add,
+  change and remove them: group, name, address (`host`, `tcp://host:port`, `dns://server/name`), which sites probe
+  it, and its own loss and latency limits. A bad field is pointed out where it is. A renamed or moved target keeps
+  its id, so its history stays. Changes are probed from the next round and reach the agents on theirs.
+  The page keeps the list in `targets.json` next to `targets.ini`; the first change copies the current targets
+  there (from `targets.ini`, or from SmokePing's config with their agents and limits; SmokePing's agents, round
+  length and pings still apply). Without `PASSWORD` the page is read-only.
+- **The version** is shown in the corner of the page, linked to its release notes, and in the start-up log.
+- **Simpler documentation**: install in three steps, a remote site in three steps, every option in one place
+  (also commented in `docker-compose.yml` and `docker-compose.agent.yml`), and the common problems with their
+  fixes. SmokePing and the inner workings moved to `docs/`.
+- **Agents**: with the server's `AGENTS` line pasted on an agent instead of `TOKEN`, the agent takes its token
+  from it and says so in the log; with no token at all, the error says where the token comes from.
+- The systemd unit keeps its targets in `/var/lib/smoketrace`, where the page can write them.
+
 ## [0.7.0] - 2026-10-21
 
 **Navigation fixed.** Moving around quickly could show the wrong data:

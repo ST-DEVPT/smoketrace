@@ -5,6 +5,7 @@ import math
 import os
 import socket
 import struct
+import sys
 import tempfile
 import threading
 import time
@@ -592,6 +593,88 @@ def test_sign_in_and_metrics():
             assert "# TYPE smoketrace_route_changes_24h gauge" in text
         finally:
             st.PASSWORD = st.METRICS_TOKEN = None
+            srv.shutdown()
+            srv.server_close()
+
+
+def test_agent_with_the_servers_agents_line_instead_of_token():
+    seen, saved = {}, (st.run_agent, st.shutil.which, sys.argv)
+    st.run_agent = lambda server, token, *_: seen.update(server=server, token=token)
+    st.shutil.which = lambda b: "/usr/bin/" + b
+    try:
+        sys.argv = ["smoketrace.py", "--agent", "https://s.example/", "--agents", "fs-opo=" + TOKEN, "--name", "fs-opo", "--token", ""]
+        st.main()
+        assert seen == {"server": "https://s.example", "token": TOKEN}      # the agent's own entry in AGENTS
+        sys.argv = ["smoketrace.py", "--agent", "https://s.example", "--agents", "", "--token", ""]
+        try:
+            st.main()
+            raise AssertionError("an agent without a token must not start")
+        except SystemExit as e:
+            assert "TOKEN" in str(e) and "AGENTS" in str(e)
+    finally:
+        st.run_agent, st.shutil.which, sys.argv = saved
+
+
+def test_version_matches_the_changelog():
+    top = next(line for line in (Path(st.__file__).parent / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+               if line.startswith("## ["))
+    assert top.startswith(f"## [{st.VERSION}]"), (top, st.VERSION)
+
+
+def test_targets_edited_on_the_page():
+    with tempfile.TemporaryDirectory() as d:
+        ini = Path(d, "targets.ini")
+        ini.write_text("[Internet]\nCloudflare = 1.1.1.1\nShop = tcp://203.0.113.20:443\n", encoding="utf-8")
+        a = args(targets=ini)
+        cfg = st.load_config(a)
+        assert cfg["source"] == "ini" and [t["id"] for t in cfg["targets"]] == ["internet-cloudflare", "internet-shop"]
+        st.apply_config(a, cfg)
+        # the list functions: a rename keeps the id (and so the history); a new target never reuses one
+        new = st.edit_targets(cfg["targets"], "save", {"id": "internet-cloudflare", "group": "DNS", "name": "Cloudflare 1",
+                                                      "address": "1.0.0.1", "loss_warn": 5})
+        assert new[0]["id"] == "internet-cloudflare" and new[0]["group"] == "DNS" and new[0]["loss_warn"] == 5.0
+        new = st.edit_targets(new, "save", {"group": "Internet", "name": "Cloudflare", "address": "dns://1.1.1.1/example.org"})
+        assert new[-1]["id"] == "internet-cloudflare-2" and new[-1]["probe"] == "dns"
+        for bad, field in (({"group": "", "name": "x", "address": "1.1.1.1"}, "group"),
+                           ({"group": "g", "name": "x", "address": "-oops"}, "address"),
+                           ({"group": "DNS", "name": "Cloudflare 1", "address": "9.9.9.9"}, "name"),
+                           ({"group": "g", "name": "x", "address": "1.1.1.1", "loss_warn": 150}, "loss_warn")):
+            try:
+                st.edit_targets(new, "save", bad)
+                raise AssertionError(bad)
+            except ValueError as e:
+                assert str(e).startswith(field + ":"), e
+        assert [t["id"] for t in st.edit_targets(new, "delete", {"id": "internet-shop"})] == ["internet-cloudflare", "internet-cloudflare-2"]
+        # over HTTP: only signed in, only JSON; the first edit moves the list to targets.json, which then wins
+        db = Path(d, "s.db")
+        st.init_db(db, "home")
+        st.Handler.db = db
+        srv, url = serve(st.Handler)
+        try:
+            st.PASSWORD = None
+            assert call(url + "/api/targets")["editable"] is False                      # no password: read-only
+            expect_http(403, lambda: call(url + "/api/targets", {"op": "delete", "id": "internet-shop"}))
+            st.PASSWORD = "correct horse"
+            cookie = "smoketrace=" + st.session_value(int(time.time()) + 3600)
+            expect_http(401, lambda: call(url + "/api/targets", {"op": "delete", "id": "internet-shop"}))
+            req = urllib.request.Request(url + "/api/targets", data=b'{"op":"delete","id":"internet-shop"}',
+                                         headers={"Cookie": cookie, "Content-Type": "text/plain"})
+            expect_http(403, lambda: urllib.request.urlopen(req, timeout=5))             # a cross-site form cannot send JSON
+
+            def post(body):
+                req = urllib.request.Request(url + "/api/targets", data=json.dumps(body).encode(),
+                                             headers={"Cookie": cookie, "Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return json.load(r)
+            out = post({"op": "save", "group": "Internet", "name": "Quad9", "address": "9.9.9.9"})
+            assert out["source"] == "page" and [t["name"] for t in out["targets"]] == ["Cloudflare", "Shop", "Quad9"]
+            assert Path(d, "targets.json").exists() and [t["name"] for t in st.Handler.targets] == ["Cloudflare", "Shop", "Quad9"]
+            e = expect_http(400, lambda: post({"op": "save", "group": "Internet", "name": "Bad", "address": "not a host!"}))
+            assert json.loads(e.read())["field"] == "address"
+            ini.write_text("[Other]\nX = 10.0.0.1\n", encoding="utf-8")                   # targets.ini no longer counts
+            assert [t["name"] for t in st.load_config(a)["targets"]] == ["Cloudflare", "Shop", "Quad9"]
+        finally:
+            st.PASSWORD = None
             srv.shutdown()
             srv.server_close()
 

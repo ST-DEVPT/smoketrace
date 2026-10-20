@@ -1,12 +1,13 @@
-# /etc/systemd/system/smoketrace.service — code in /opt/smoketrace, data in /var/lib/smoketrace
+# /etc/systemd/system/smoketrace.service — code in /opt/smoketrace, data and targets in /var/lib/smoketrace
 [Unit]
 Description=smoketrace (fping + mtr)
 Wants=network-online.target
 After=network-online.target
 
 [Service]
-ExecStart=/usr/bin/python3 /opt/smoketrace/smoketrace.py --targets /etc/smoketrace/targets.ini --db /var/lib/smoketrace/smoketrace.db --bind 0.0.0.0 --port 8099
+ExecStart=/usr/bin/python3 /opt/smoketrace/smoketrace.py --targets /var/lib/smoketrace/targets.ini --db /var/lib/smoketrace/smoketrace.db --bind 0.0.0.0 --port 8099
 # Environment=NAME=home
+# Environment=PASSWORD=change-me
 # Environment=AGENTS=porto=a-long-random-token
 # An agent instead: ExecStart=/usr/bin/python3 /opt/smoketrace/smoketrace.py --agent http://server:8099 --token ...
 DynamicUser=yes

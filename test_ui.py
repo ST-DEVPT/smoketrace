@@ -4,7 +4,10 @@
     pip install playwright && python -m playwright install chromium
     python test_ui.py [http://127.0.0.1:8099]      # CHROMIUM=<path> to use a browser you already have
 
-Each check slows one kind of answer on purpose (a week-long board, a target's range, a traceroute) and then
+Then the targets page, on a server of its own: add, refuse a bad address on its field, rename (the id and so
+the history stay), filter without losing a half-filled form, remove.
+
+Each navigation check slows one kind of answer on purpose (a week-long board, a target's range, a traceroute) and then
 does what a person does next, so a late answer has the chance to paint over the newer one."""
 import os
 import sys
@@ -155,6 +158,100 @@ with sync_playwright() as p:
 
     check("no page errors", not errors, errors)
     b.close()
+
+
+
+# ---------- the targets page: its own server on a temporary targets.ini, with a password ----------
+import argparse  # noqa: E402
+import json  # noqa: E402
+import tempfile  # noqa: E402
+import threading  # noqa: E402
+from http.server import ThreadingHTTPServer  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import smoketrace as st  # noqa: E402
+
+d = Path(tempfile.mkdtemp())
+ini = d / "targets.ini"
+ini.write_text("[Internet]\nCloudflare = 1.1.1.1\nGoogle = 8.8.8.8\n\n[Sites / Lisbon]\nRouter = 10.40.1.1\n", encoding="utf-8")
+a = argparse.Namespace(smokeping=None, targets=ini, agents="porto=" + "x" * 24, name="home")
+st.init_db(d / "s.db", "home")
+st.Handler.db = d / "s.db"
+st.apply_config(a, st.load_config(a))
+st.PASSWORD = "pw-for-the-test"
+srv = ThreadingHTTPServer(("127.0.0.1", 0), st.Handler)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+EDIT_URL = f"http://127.0.0.1:{srv.server_address[1]}"
+
+with sync_playwright() as p:
+    b = p.chromium.launch(executable_path=os.environ.get("CHROMIUM") or None)
+    pg = b.new_page(viewport={"width": 1440, "height": 900})
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.add_init_script("localStorage.setItem('lang','en');localStorage.setItem('theme','dark')")
+    pg.goto(EDIT_URL + "/login")
+    pg.fill("#p", "pw-for-the-test")
+    pg.click("#b")
+    pg.wait_for_url(EDIT_URL + "/")
+    pg.goto(EDIT_URL + "/#/targets")
+    pg.wait_for_function("TG.data && document.querySelector('#tlist table')")
+    check("the list shows the three targets", pg.evaluate("TG.data.targets.length") == 3)
+    check("the sidebar marks Targets", pg.evaluate("document.querySelector('a.node[href=\"#/targets\"]').getAttribute('aria-current')") == "true")
+
+    # add
+    pg.click("[data-act=tadd]")
+    pg.fill("#tform [name=group]", "Internet")
+    pg.fill("#tform [name=name]", "Quad9")
+    pg.fill("#tform [name=address]", "not a host!")
+    pg.click("#tform button[type=submit]")
+    pg.wait_for_function("document.querySelector('.ferr[data-for=address]').textContent.length > 0")
+    check("a bad address is shown on its field", pg.evaluate("document.querySelector('[name=address]').getAttribute('aria-invalid')") == "true")
+    pg.fill("#tform [name=address]", "9.9.9.9")
+    pg.fill("#tform [name=loss_warn]", "5")
+    pg.uncheck("#tform [name=agent][value=porto]")
+    pg.click("#tform button[type=submit]")
+    pg.wait_for_function("!TG.edit && TG.data.targets.some(x => x.name === 'Quad9')")
+    q9 = pg.evaluate("TG.data.targets.find(x => x.name === 'Quad9')")
+    check("added with its limit and only the server probing", q9["loss_warn"] == 5 and q9["slaves"] == [] and q9["master"] is True, q9)
+    saved = json.loads((d / "targets.json").read_text(encoding="utf-8"))
+    check("targets.json now holds the list", [t["name"] for t in saved["targets"]] == ["Cloudflare", "Google", "Router", "Quad9"], saved)
+    check("the server probes it now", any(t["name"] == "Quad9" for t in st.Handler.targets))
+
+    # edit: rename and move keeps the id
+    pg.click("[data-tedit='internet-cloudflare']")
+    pg.wait_for_function("TG.edit && TG.edit.id === 'internet-cloudflare'")
+    pg.fill("#tform [name=group]", "DNS")
+    pg.fill("#tform [name=name]", "Cloudflare 1.0.0.1")
+    pg.fill("#tform [name=address]", "1.0.0.1")
+    pg.keyboard.press("Enter")
+    pg.wait_for_function("!TG.edit && TG.data.targets.some(x => x.group === 'DNS')")
+    cf = next(t for t in st.Handler.targets if t["group"] == "DNS")
+    check("a rename keeps the id (and the history)", cf["id"] == "internet-cloudflare" and cf["host"] == "1.0.0.1", cf)
+
+    # filter keeps a half-filled form
+    pg.click("[data-act=tadd]")
+    pg.fill("#tform [name=name]", "half typed")
+    pg.fill("#tq", "goo")
+    pg.wait_for_timeout(100)
+    check("filtering keeps what the form holds", pg.input_value("#tform [name=name]") == "half typed"
+          and pg.evaluate("document.querySelectorAll('#tlist tbody tr:not(.grp)').length") == 1)
+    pg.click("[data-act=tcancel]")
+
+    # delete, with the confirmation
+    pg.fill("#tq", "")
+    pg.click("[data-tedit='internet-google']")
+    pg.once("dialog", lambda dlg: dlg.accept())
+    pg.click("[data-act=tdel]")
+    pg.wait_for_function("!TG.data.targets.some(x => x.name === 'Google')")
+    check("removed", not any(t["name"] == "Google" for t in st.Handler.targets))
+
+    # the overview shows the new list
+    pg.goto(EDIT_URL + "/#/")
+    pg.wait_for_function("S.b && S.b.targets.length === 3")
+    check("the overview has the edited list", sorted(x["name"] for x in pg.evaluate("S.b.targets")) == ["Cloudflare 1.0.0.1", "Quad9", "Router"])
+    check("no page errors", not errors, errors)
+    b.close()
+srv.shutdown()
 
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)

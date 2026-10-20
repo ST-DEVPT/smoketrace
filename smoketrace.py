@@ -44,6 +44,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+VERSION = "0.8.0"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
@@ -139,6 +140,90 @@ def load_targets(path):
             seen.add(tid)
             targets.append(t)
     return targets
+
+
+def address(t):
+    """A target's address as it is written: host, tcp://host:port or dns://server/name."""
+    if t["probe"] == "tcp":
+        return f"tcp://{'[' + t['host'] + ']' if ':' in t['host'] else t['host']}:{t['port']}"
+    return f"dns://{t['host']}/{t['lookup']}" if t["probe"] == "dns" else t["host"]
+
+
+EDITABLE = ("group", "name", "address", "slaves", "master", "loss_warn", "loss_crit", "latency_warn")
+
+
+def target_from(d, tid):
+    """A target from the page's fields (or a targets.json entry); ValueError names the field that is wrong."""
+    group, name = str(d.get("group") or "").strip(), str(d.get("name") or "").strip()
+    if not group or len(group) > 120 or any(c in group for c in "[]\n\r"):
+        raise ValueError("group: a name without [ ] or line breaks, up to 120 characters")
+    if not name or len(name) > 120 or any(c in name for c in "=\n\r"):
+        raise ValueError("name: a name without = or line breaks, up to 120 characters")
+    slaves = d.get("slaves")
+    if slaves is not None and not (isinstance(slaves, list) and all(isinstance(x, str) and NAME_RE.fullmatch(x) for x in slaves)):
+        raise ValueError("slaves: a list of agent names")
+    limits = {}
+    for k in ("loss_warn", "loss_crit", "latency_warn"):
+        v = d.get(k)
+        if v in (None, ""):
+            limits[k] = None
+        elif isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= (100 if k != "latency_warn" else 60000):
+            limits[k] = float(v)
+        else:
+            raise ValueError(f"{k}: a number" + (" from 0 to 100" if k != "latency_warn" else " of ms"))
+    try:
+        return make_target(tid, group, name, **parse_host(str(d.get("address") or "")), slaves=slaves,
+                           master=d.get("master", True) is not False, **limits)
+    except ValueError as e:
+        raise ValueError(f"address: {e}")
+
+
+def load_json_targets(path):
+    """targets.json, the list the page edits: {"targets": [{id, group, name, address, ...}]}."""
+    try:
+        items = json.loads(path.read_text(encoding="utf-8"))["targets"]
+        targets = [target_from(d, d["id"]) for d in items]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise SystemExit(f"{path}: {e}")
+    if len({t["id"] for t in targets}) != len(targets):
+        raise SystemExit(f"{path}: two targets share an id")
+    return targets
+
+
+def save_json_targets(path, targets):
+    """Written whole and swapped in, so a reader never sees half a file."""
+    body = {"targets": [{"id": t["id"], **{k: (address(t) if k == "address" else t[k]) for k in EDITABLE}} for t in targets]}
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(body, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def edit_targets(targets, op, d):
+    """-> the new list. Ids stay with their targets through renames and moves, so their history stays too."""
+    out = list(targets)
+    i = next((k for k, t in enumerate(out) if t["id"] == d.get("id")), None)
+    if op == "delete":
+        if i is None:
+            raise ValueError("id: no such target")
+        del out[i]
+        return out
+    if op != "save":
+        raise ValueError("op: save or delete")
+    if d.get("id") and i is None:
+        raise ValueError("id: no such target")
+    tid = out[i]["id"] if i is not None else slug(f"{d.get('group')}-{d.get('name')}")
+    taken = {t["id"] for k, t in enumerate(out) if k != i}
+    base, n = tid, 2
+    while tid in taken:                    # a new target never takes an old one's id (nor its history)
+        tid, n = f"{base}-{n}", n + 1
+    t = target_from(d, tid)
+    if any((x["group"], x["name"]) == (t["group"], t["name"]) for k, x in enumerate(out) if k != i):
+        raise ValueError("name: this group already has a target with that name")
+    if i is None:
+        out.append(t)
+    else:
+        out[i] = t
+    return out
 
 
 def parse_agents(spec, local):
@@ -339,10 +424,11 @@ def smokeping_agents(secs, base, files):
 def load_config(a):
     """-> {targets, agents, step, pings, files}, from SmokePing's config or targets.ini, plus AGENTS."""
     files, step, pings, agents = [], DEFAULT_STEP, DEFAULT_PINGS, {}
+    edited = a.targets.with_suffix(".json")       # once targets are edited on the page, they live here
     if a.smokeping:
         lines, base = read_smokeping_config(a.smokeping, files)
         secs = parse_smokeping(lines)
-        targets = smokeping_targets(secs)
+        targets = None if edited.exists() else smokeping_targets(secs)   # its slaves, step and pings still count
         agents = smokeping_agents(secs, base, files)
         db = secs.get("Database", ({}, []))[0]
         try:
@@ -352,15 +438,20 @@ def load_config(a):
             raise SystemExit("*** Database ***: step and pings must be whole numbers")
         if not (60 <= step <= 3600 and 1 <= pings <= 100):
             raise SystemExit("*** Database ***: step must be 60-3600 s and pings 1-100")
-    else:
+    elif not edited.exists():
         if not a.targets.exists() and (HERE / "targets.ini").exists():
             shutil.copy(HERE / "targets.ini", a.targets)
             log(f"wrote an example targets file to {a.targets}: put your targets in it")
         targets = load_targets(a.targets)
         files.append(a.targets)
+    source = "smokeping" if a.smokeping else "ini"
+    if edited.exists():
+        targets, source = load_json_targets(edited), "page"
+        files.append(edited)
     agents.update(parse_agents(a.agents, a.name))      # AGENTS adds to (or overrides) SmokePing's slaves
     agents.pop(a.name, None)
-    return {"targets": targets, "agents": agents, "step": step, "pings": pings, "files": files}
+    return {"targets": targets, "agents": agents, "step": step, "pings": pings, "files": files, "source": source,
+            "edited": edited}
 
 
 def stamp(files):
@@ -1172,6 +1263,7 @@ def trace_detail(db, src, tid, ts, vs):
 SEVERITY = {"ok": 0, "warn": 1, "crit": 2, "down": 3}
 BOARD_BUCKET = {6 * 3600: 300, 86400: 900, 7 * 86400: 7200}      # heatmap cell per range: 72, 96, 84 cells
 BOARD_CACHE = {}            # (source, range) -> (computed at, data version, body)
+EDIT_LOCK = threading.Lock()
 BOARD_LOCKS = {}
 
 
@@ -1311,7 +1403,7 @@ def board(db, sources, src, targets, rng, now):
     last = last_rounds(db)
     events = sorted(events + agent_ev, key=lambda e: -e["ts"])[:500]
     return {"now": now, "step": STEP, "source": src, "range": rng, "start": start, "width": width, "cells": nb,
-            "auth": bool(PASSWORD), "sources": [{"name": x, "last_ts": last.get(x)} for x in sources], "targets": out,
+            "auth": bool(PASSWORD), "version": VERSION, "sources": [{"name": x, "last_ts": last.get(x)} for x in sources], "targets": out,
             "fleet": [round(statistics.median(f), 1) if f else None for f in fleet],
             "problems": problems, "clusters": clusters, "local": local, "events": events,
             "loss_warn": LOSS_WARN, "loss_crit": LOSS_CRIT}
@@ -1627,6 +1719,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError(src)
             t = next((x for x in self.targets if x["id"] == q.get("id")), None)
             with db_open(self.db) as db:
+                if u.path == "/api/targets":
+                    return self.json(self.target_list())
                 if u.path == "/api/overview":
                     return self.json(overview(db, self.sources, src, self.targets, now))
                 if u.path == "/api/board":
@@ -1673,6 +1767,8 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(1)       # slows down guessing
             page = LOGIN_PAGE.replace("%ERROR%", '<p class="err" role="alert">Wrong password.</p>')
             return self.send(401, page.encode(), "text/html; charset=utf-8")
+        if path == "/api/targets":
+            return self.edit_targets(body)
         if path != "/api/agent/push":
             return self.send(404, b'{"error":"not found"}', "application/json")
         name = self.agent()
@@ -1687,6 +1783,40 @@ class Handler(BaseHTTPRequestHandler):
         store(self.db, *round_rows(name, ts, pings, traces), now)
         ALERTS.check(self.db, name)
         self.json({"ok": True})
+
+    def target_list(self):
+        why = None
+        if CONFIG["source"] == "demo":
+            why = "demo"
+        elif not PASSWORD:
+            why = "password"         # anyone who can open the page could change what the server probes
+        return {"source": CONFIG["source"], "file": str(CONFIG["edited"] or ""), "editable": why is None, "why": why,
+                "sources": self.sources, "targets": [{"id": t["id"], **{k: (address(t) if k == "address" else t[k])
+                                                                      for k in EDITABLE}, "probe": t["probe"]}
+                                                     for t in self.targets]}
+
+    def edit_targets(self, body):
+        """The page's edits: signed in, JSON only (a cross-site form cannot send it), written to targets.json."""
+        if not signed_in(self.headers.get("Cookie")):
+            return self.send(401, b'{"error":"sign in"}', "application/json")
+        if not self.target_list()["editable"] or "application/json" not in self.headers.get("Content-Type", ""):
+            return self.send(403, b'{"error":"editing is off"}', "application/json")
+        try:
+            d = json.loads(body)
+            with EDIT_LOCK:
+                new = edit_targets(self.targets, d.get("op"), d)
+                save_json_targets(CONFIG["edited"], new)
+                apply_config(CONFIG["args"], load_config(CONFIG["args"]))
+        except (ValueError, AttributeError, TypeError) as e:
+            field, _, msg = str(e).partition(": ")
+            if field not in (*EDITABLE, "id", "op"):
+                field, msg = None, str(e)
+            return self.send(400, json.dumps({"error": msg or field, "field": field if msg else None}).encode(),
+                             "application/json")
+        except (SystemExit, OSError) as e:     # a list that no longer loads, or a folder it cannot write to
+            return self.send(500, json.dumps({"error": str(e)}).encode(), "application/json")
+        log(f"targets edited on the page: {d.get('op')} {d.get('id') or d.get('name')}")
+        self.json({"ok": True, **self.target_list()})
 
     def metrics(self, now):
         if METRICS_TOKEN or PASSWORD:
@@ -1937,14 +2067,15 @@ def seed_demo(path, source, targets, ping, trace, t0, days=7):
 
 # ---------- main ----------
 
-CONFIG = {"stamp": None, "files": []}
+CONFIG = {"stamp": None, "files": [], "source": "demo", "edited": None, "args": None}
 
 
 def apply_config(a, cfg):
     global STEP, PINGS
     STEP, PINGS = cfg["step"], cfg["pings"]
     Handler.targets, Handler.agents, Handler.sources = cfg["targets"], cfg["agents"], [a.name, *cfg["agents"]]
-    CONFIG.update(files=cfg["files"], stamp=stamp(cfg["files"]))
+    CONFIG.update(files=cfg["files"], stamp=stamp(cfg["files"]), source=cfg["source"], edited=cfg["edited"], args=a)
+    BOARD_CACHE.clear()
 
 
 def maybe_reload(a):
@@ -2005,8 +2136,15 @@ def main():
         if missing:
             raise SystemExit(f"{', '.join(missing)} not found (Debian: apt install fping mtr-tiny)")
     if a.agent or a.listen:
+        if not a.token and a.agents:     # the server's AGENTS line pasted on the agent: its token is in there
+            mine = parse_agents(a.agents, "")
+            pick = mine.get(a.name) or (next(iter(mine.values())) if len(mine) == 1 else None)
+            if pick:
+                a.token = pick["token"]
+                log("using the token from AGENTS; on an agent it goes in TOKEN (AGENTS is the server's list)")
         if not a.token:
-            raise SystemExit("an agent needs --token (TOKEN)")
+            raise SystemExit("an agent needs its token in TOKEN: the same token the server lists for it in AGENTS "
+                             "(name=token); AGENTS itself belongs on the server")
         if a.listen:
             return run_listener(a.listen, a.token, real_ping, mtr)
         return run_agent(a.agent.rstrip("/"), a.token, real_ping, mtr)
@@ -2044,7 +2182,7 @@ def main():
         Handler.db = db
 
     extras = [x for x, on in (("sign-in", PASSWORD), ("alerts", ALERTS.enabled()), ("metrics token", METRICS_TOKEN)) if on]
-    log(f"smoketrace: {len(Handler.targets)} targets, sources {', '.join(Handler.sources)}"
+    log(f"smoketrace {VERSION}: {len(Handler.targets)} targets, sources {', '.join(Handler.sources)}"
         f"{', ' + ', '.join(extras) if extras else ''}, http://{a.bind}:{a.port}")
     ThreadingHTTPServer((a.bind, a.port), Handler).serve_forever()
 

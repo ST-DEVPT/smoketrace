@@ -1,29 +1,61 @@
-# The server: probes from this machine, stores everything, alerts, serves the dashboard on port 8099.
-# First start writes an example data/targets.ini: put your targets in it (picked up before the next round).
+# smoketrace server: probes from this machine, keeps the history, sends alerts and serves the page on port 8099.
+#
+#   mkdir smoketrace && cd smoketrace
+#   curl -O https://raw.githubusercontent.com/ST-DEVPT/smoketrace/main/docker-compose.yml
+#   (change PASSWORD below)
+#   docker compose up -d
+#
+# Then open http://<this-host>:8099, sign in, and add targets on the Targets page.
+# Update: docker compose pull && docker compose up -d
+#
+# Every option is listed below. Lines starting with # are off; remove the # to use one.
+
 services:
   smoketrace:
-    image: ghcr.io/st-devpt/smoketrace:latest
+    image: ghcr.io/st-devpt/smoketrace:latest      # or pin a version: ghcr.io/st-devpt/smoketrace:0.8
     container_name: smoketrace
     restart: unless-stopped
     network_mode: host            # traceroutes start at your real gateway, not at Docker's bridge
     volumes:
-      - ./data:/data              # targets.ini and the database
-      # Coming from SmokePing? Read its config as it is (targets, probes, slaves as agents, step and pings):
-      # - /etc/smokeping:/etc/smokeping:ro     # SmokePing in a container: its folder, e.g. /DATA/smokeping/config
+      - ./data:/data              # the database and your targets: back up this folder
+      # Coming from SmokePing? Mount its config folder (read-only) and set SMOKEPING_CONFIG below.
+      # SmokePing in a container (linuxserver/smokeping): its config folder, e.g. /DATA/smokeping/config
+      # - /etc/smokeping:/etc/smokeping:ro
     environment:
-      TZ: Europe/Lisbon
-      NAME: home                  # what the dashboard calls this probe
-      PASSWORD: change-me         # sign-in for the dashboard; remove the line to have none
+      TZ: Europe/Lisbon           # the time zone for the logs
+
+      # --- the basics ---------------------------------------------------------------------------------------
+      NAME: home                  # what the page calls this server's own probe (lowercase, digits, -)
+      PASSWORD: change-me         # the sign-in for the page and its API; needed to edit targets on the page
+      # PUBLIC_URL: https://smoketrace.example.com   # this page's address, so alerts link to it
+      # PORT: 8099                # the port the page listens on
+
+      # --- where the targets come from ------------------------------------------------------------------------
+      # Add and edit them on the Targets page; they are kept in /data/targets.json. The first start writes an
+      # example /data/targets.ini, which the page takes over at its first change. Or read SmokePing's config as it is
+      # (the page then takes over its targets the same way; its agents, round length and pings still apply):
       # SMOKEPING_CONFIG: /etc/smokeping
-      # Remote agents, each with its own long random token (openssl rand -hex 24); @address = the server pulls:
+
+      # --- remote sites (agents) --------------------------------------------------------------------------------
+      # One entry per site: name=token. Make a token with:  openssl rand -hex 24
+      # The site then runs docker-compose.agent.yml with that same token in TOKEN.
+      # name=token@http://site:8100 when the server must fetch from the site instead (the site cannot reach here).
       # AGENTS: porto=paste-a-long-random-token,office=paste-another-one@http://office.lan:8100
-      # Alerts (any of them) and the address their links point to:
+
+      # --- alerts (any or all) ----------------------------------------------------------------------------------
       # DISCORD_WEBHOOK: https://discord.com/api/webhooks/...
       # NTFY_URL: https://ntfy.sh/your-topic
-      # WEBHOOK_URL: https://example.com/hook
-      # PUBLIC_URL: https://smoketrace.example.com
-      # METRICS_TOKEN: another-long-random-token   # Prometheus sends it as a bearer token
-      # PORT: 8099
+      # WEBHOOK_URL: https://example.com/hook      # a JSON POST for every alert
+      # ALERT_ROUTES: "0"         # alerts for status changes only, not route changes
+      # LOSS_WARN: "10"           # % lost in a round for a warning (2 of 20 pings)
+      # LOSS_CRIT: "20"           # % lost in a round for critical (4 of 20 pings)
+
+      # --- Prometheus ------------------------------------------------------------------------------------------
+      # METRICS_TOKEN: another-long-random-token   # /metrics then needs it as a bearer token
+
+      # --- tuning -----------------------------------------------------------------------------------------------
+      # TRACE_PARALLEL: "16"      # traceroutes at once (1-64): fewer use less CPU, more trace each target more often
+      # ASN: "0"                  # no AS numbers and operator names on hops
     logging:
       options: {max-size: 10m, max-file: "3"}
     read_only: true

@@ -1,20 +1,31 @@
-# A remote agent: probes the server's targets from where it runs. It reads no config of its own: the server
-# gives it its targets, the round length and the pings.
-#   docker compose -f docker-compose.agent.yml up -d
+# smoketrace agent: probes the server's targets from another site. It has no config of its own: the server tells it
+# what to probe, how often and how many pings.
+#
+#   1. On the server, add this site to AGENTS:   AGENTS: porto=<token>      (token: openssl rand -hex 24)
+#   2. Here, put the same token in TOKEN below and the server's address in SERVER.
+#   3. docker compose -f docker-compose.agent.yml up -d
+#
+# The site shows up under "Seen from" on the page after its first round (5 minutes).
+
 services:
   smoketrace-agent:
-    image: ghcr.io/st-devpt/smoketrace:latest
+    image: ghcr.io/st-devpt/smoketrace:latest      # keep it on the same version as the server
     container_name: smoketrace-agent
     restart: unless-stopped
     network_mode: host
     environment:
       TZ: Europe/Lisbon
-      TOKEN: paste-this-agent-s-token       # the token after its name in the server's AGENTS (or its SmokePing secret)
-      # Either it pushes to the server (outgoing connections only)...
-      SERVER: http://smoketrace.lan:8099    # over the internet: put the server behind HTTPS or a VPN
-      # ...or the server pulls from it (when it cannot reach the server): remove SERVER, open 8100 to the server
-      # only, and give the server `name=token@http://this-host:8100` in AGENTS
+      TOKEN: paste-this-site-s-token     # the token after this site's name in the server's AGENTS
+
+      # How the rounds reach the server, one of two ways:
+      # a) this site sends them (it only needs to reach the server; nothing to open here):
+      SERVER: https://smoketrace.example.com     # over the internet use HTTPS (a reverse proxy) or a VPN
+      # b) the server fetches them (the server can reach this site, not the other way round):
+      #    remove SERVER, open port 8100 to the server only, and write name=token@http://this-site:8100 in AGENTS
       # LISTEN: 0.0.0.0:8100
+
+      # TRACE_PARALLEL: "16"     # traceroutes at once (1-64)
+      # ASN: "0"                 # no AS lookups on hops
     logging:
       options: {max-size: 10m, max-file: "3"}
     read_only: true

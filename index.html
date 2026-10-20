@@ -74,6 +74,7 @@ body.app { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-heigh
 .node { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center; gap: 7px; width: 100%; padding: 6px 10px 6px 6px; border: 0; border-radius: 6px;
   background: none; text-align: left; color: var(--ink-2); font-size: 13.5px; }
 .node:hover { background: var(--bg); color: var(--ink); }
+a.node { text-decoration: none; }
 .node[aria-current="true"] { background: var(--bg); color: var(--ink); font-weight: 600; }
 .node .chev { width: 14px; height: 14px; display: grid; place-items: center; color: var(--ink-3); border-radius: 3px; transition: transform .15s; }
 .node .chev:hover { color: var(--ink); background: var(--panel-3); }
@@ -85,6 +86,8 @@ body.app { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-heigh
 .kids { margin-left: 12px; padding-left: 4px; border-left: 1px solid var(--line); }
 .side-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 12px 10px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-3); }
 .side-foot .grow { min-height: 22px; }
+.ver { font: 11.5px "Plex Mono", monospace; color: var(--ink-3); text-decoration: none; }
+.ver:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
 .side-foot button:not(.linkish) { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-2); background: transparent; border-radius: 4px; padding: 2px 7px; font-size: 11.5px; color: var(--ink-2); }
 .side-foot button:hover { border-color: var(--ink-3); color: var(--ink); }
 .linkish { border: 0; background: none; padding: 0; font-size: 12px; color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; }
@@ -299,6 +302,33 @@ details.panel > summary::before { content: "+ "; color: var(--ink-3); font-weigh
 details.panel[open] > summary::before { content: "− "; }
 details .tw { max-height: 420px; overflow: auto; margin-bottom: 18px; }
 .empty { padding: 44px 0; text-align: center; color: var(--ink-2); }
+.btn.primary { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.btn.danger { border-color: color-mix(in srgb, var(--down) 60%, transparent); color: var(--down); }
+.btn:disabled { opacity: .5; cursor: default; }
+.tform { margin: 22px 0 6px; padding: 20px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); }
+.tform h2 { margin: 0 0 16px; font-size: 16px; font-weight: 600; }
+.fgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; }
+.fgrid .wide { grid-column: 1 / -1; }
+.fld { display: grid; gap: 6px; align-content: start; font-size: 13px; color: var(--ink-2); }
+.fld > span { font-weight: 500; color: var(--ink); }
+.fld input { height: 38px; padding: 0 11px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg); font-size: 14px; outline: none; }
+.fld input:focus { border-color: var(--ink-3); }
+.fld input[aria-invalid="true"] { border-color: var(--down); }
+.fld small { font-size: 12px; color: var(--ink-3); }
+.fld .ferr { color: var(--down); }
+.fld .ferr:empty { display: none; }
+.checks { display: flex; flex-wrap: wrap; gap: 8px 18px; padding-top: 2px; }
+.checks label { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: var(--ink); }
+.checks input { width: 16px; height: 16px; margin: 0; accent-color: var(--ink); }
+.three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.factions { display: flex; align-items: center; gap: 8px; margin-top: 20px; }
+.factions .saved { font-size: 13px; color: var(--ink-3); }
+.ttools { display: flex; align-items: center; gap: 12px; margin: 22px 0 12px; }
+.ttools input { width: 320px; max-width: 100%; height: 32px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg); font-size: 13px; outline: none; }
+.ttools input:focus { border-color: var(--ink-3); }
+table.tlist td { height: 44px; }
+table.tlist td.act { width: 1%; text-align: right; }
+.tnav { display: grid; gap: 1px; margin-bottom: 4px; }
 .sk { display: inline-block; width: 6ch; height: .8em; border-radius: 3px; background: var(--panel-3); vertical-align: middle; }
 .sk.w2 { width: 14ch; } .sk.w3 { width: 40ch; max-width: 100%; }
 .empty h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; color: var(--ink); }
@@ -327,6 +357,7 @@ details .tw { max-height: 420px; overflow: auto; margin-bottom: 18px; }
   .main { padding: 20px 16px 48px; }
   .page-head h1 { font-size: 28px; }
   .hide-s { display: none !important; }
+  .fgrid, .three { grid-template-columns: minmax(0, 1fr); }
   .barw { display: none; }
   .tag .tl { display: none; }      /* the red station on the line says it */
   .asn { max-width: 22ch; }
@@ -355,7 +386,7 @@ details .tw { max-height: 420px; overflow: auto; margin-bottom: 18px; }
   </div>
   <label class="search"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m11 11 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input id="q" type="search" autocomplete="off" spellcheck="false" aria-label="Search"><kbd>/</kbd></label>
   <nav id="tree" aria-label="Groups"></nav>
-  <div class="side-foot"><button data-act="lang" id="lang"></button><button data-act="theme" id="themeBtn"></button><span class="grow"></span><a class="linkish" id="out" href="/logout" hidden></a></div>
+  <div class="side-foot"><a id="ver" class="ver" target="_blank" rel="noopener" hidden></a><button data-act="lang" id="lang"></button><button data-act="theme" id="themeBtn"></button><span class="grow"></span><a class="linkish" id="out" href="/logout" hidden></a></div>
 </aside>
 <main class="main">
   <div class="offline-banner" id="banner" role="alert" hidden><span></span><button class="linkish" data-act="retry"></button></div>
@@ -427,7 +458,25 @@ const I18N = {
     notFoundT: "Target not found", notFoundB: 'It may have been removed from the config. <a href="#/">Back to the dashboard</a>',
     signOut: "Sign out", langBtn: "PT", langTitle: "Português", themeDark: "Dark", themeLight: "Light", keys: "← → Enter",
     chartLbl: (n, a, b, c) => `Latency of ${n}: median between ${a} and ${b}; route: ${c}. A data table is below.`,
-    noReply: "No reply",
+    noReply: "No reply", releaseNotes: "What changed in this version",
+    targetsNav: "Targets", tAdd: "Add target", tAddTitle: "New target", tEditTitle: n => `Edit ${n}`, tEdit: "Edit",
+    tName: "Name", tAddress: "Address", tProbe: "Probe", tProbedBy: "Probed by", tLimits: "Limits", tThisServer: "(this server)",
+    tAllAgents: "every agent", tFilter: "Filter by name, group or address", tSave: "Save", tCancel: "Cancel", tRemove: "Remove",
+    tGroupHelp: "Pick one or type a new one; “Sites / Lisbon” nests Lisbon under Sites.",
+    tAddressHelp: "An IP address or host name to ping; tcp://host:443 to time a TCP connection; dns://9.9.9.9/example.org to time a DNS answer.",
+    tAgentsHelp: "With every agent ticked, agents added later probe it too.",
+    tLossWarn: "Warn at loss %", tLossCrit: "Critical at loss %", tLatWarn: "Warn above ms", tLatAuto: "from its usual",
+    tLimitsHelp: "Empty fields use the defaults.", tNumber: "A number, please",
+    tSaved: n => `Saved ${n}. It is probed from the next round.`, tRemoved: n => `Removed ${n}. Its history stays until it ages out.`,
+    tConfirm: n => `Remove ${n}? It stops being probed; its history stays for 30 days.`,
+    tFromIni: "Read from targets.ini. Your first change here copies the list to targets.json, which smoketrace reads from then on.",
+    tFromSmokeping: "Read from SmokePing's config. Your first change here copies the targets to targets.json; from then on smoketrace reads that list, and SmokePing's agents, round length and pings still apply.",
+    tFromPage: f => `Kept by smoketrace in ${f}. Changes are probed from the next round.`,
+    tWhyPassword: "Read-only: set PASSWORD to edit targets here. Without a sign-in, anyone who opens this page could change what your server probes.",
+    tWhyDemo: "The demo's targets are fixed.",
+    tMoveIni: "Saving copies the list to targets.json; edits to targets.ini are not read after that.",
+    tMoveSmokeping: "Saving copies SmokePing's targets to targets.json; changes to SmokePing's Targets are not read after that.",
+    tFirst: "Add the first one with “Add target”.", tOpen: "Add them on the Targets page.",
     fClear: (n, s) => s ? `All ${n} targets answer normally from ${s}.` : `All ${n} targets answer normally.`,
     fBad: (b, n) => `<b>${b} of ${n} targets need attention.</b>`,
     fCluster: (n, w, loss) => loss ? `${n} of them lose packets at ${w}.` : `${n} of them stop answering after ${w}.`,
@@ -491,7 +540,25 @@ const I18N = {
     notFoundT: "Alvo não encontrado", notFoundB: 'Pode ter sido removido da config. <a href="#/">Voltar ao painel</a>',
     signOut: "Sair", langBtn: "EN", langTitle: "English", themeDark: "Escuro", themeLight: "Claro", keys: "← → Enter",
     chartLbl: (n, a, b, c) => `Latência de ${n}: mediana entre ${a} e ${b}; rota: ${c}. Tabela de dados disponível abaixo.`,
-    noReply: "Sem resposta",
+    noReply: "Sem resposta", releaseNotes: "O que mudou nesta versão",
+    targetsNav: "Alvos", tAdd: "Adicionar alvo", tAddTitle: "Novo alvo", tEditTitle: n => `Editar ${n}`, tEdit: "Editar",
+    tName: "Nome", tAddress: "Endereço", tProbe: "Sonda", tProbedBy: "Medido por", tLimits: "Limites", tThisServer: "(este servidor)",
+    tAllAgents: "todos os agentes", tFilter: "Filtrar por nome, grupo ou endereço", tSave: "Guardar", tCancel: "Cancelar", tRemove: "Remover",
+    tGroupHelp: "Escolha um ou escreva um novo; “Sites / Lisboa” põe Lisboa dentro de Sites.",
+    tAddressHelp: "Um IP ou nome a pingar; tcp://host:443 para medir uma ligação TCP; dns://9.9.9.9/example.org para medir uma resposta DNS.",
+    tAgentsHelp: "Com todos os agentes marcados, os agentes que se juntarem depois também o medem.",
+    tLossWarn: "Aviso a partir de % de perda", tLossCrit: "Crítico a partir de % de perda", tLatWarn: "Aviso acima de ms", tLatAuto: "pelo seu normal",
+    tLimitsHelp: "Campos vazios usam os valores por omissão.", tNumber: "Tem de ser um número",
+    tSaved: n => `${n} guardado. É medido a partir da próxima ronda.`, tRemoved: n => `${n} removido. O histórico fica até expirar.`,
+    tConfirm: n => `Remover ${n}? Deixa de ser medido; o histórico fica durante 30 dias.`,
+    tFromIni: "Lidos do targets.ini. A primeira alteração aqui copia a lista para targets.json, que o smoketrace passa a ler.",
+    tFromSmokeping: "Lidos da config do SmokePing. A primeira alteração aqui copia os alvos para targets.json; a partir daí o smoketrace lê essa lista, e os agentes, a duração da ronda e os pings do SmokePing continuam a valer.",
+    tFromPage: f => `Guardados pelo smoketrace em ${f}. As alterações são medidas a partir da próxima ronda.`,
+    tWhyPassword: "Só leitura: defina PASSWORD para editar os alvos aqui. Sem sessão iniciada, qualquer pessoa que abra esta página podia mudar o que o servidor mede.",
+    tWhyDemo: "Os alvos da demo são fixos.",
+    tMoveIni: "Guardar copia a lista para targets.json; alterações ao targets.ini deixam de ser lidas.",
+    tMoveSmokeping: "Guardar copia os alvos do SmokePing para targets.json; alterações aos Targets do SmokePing deixam de ser lidas.",
+    tFirst: "Adicione o primeiro com “Adicionar alvo”.", tOpen: "Adicione-os na página Alvos.",
     fClear: (n, s) => s ? `Todos os ${n} alvos respondem normalmente a partir de ${s}.` : `Todos os ${n} alvos respondem normalmente.`,
     fBad: (b, n) => `<b>${b} de ${n} alvos precisam de atenção.</b>`,
     fCluster: (n, w, loss) => loss ? `${n} deles perdem pacotes em ${w}.` : `${n} deles deixam de responder depois de ${w}.`,
@@ -565,7 +632,7 @@ const S = {
 };
 // every load takes a number; an answer that comes back after a newer request of its kind is dropped, so a slow
 // week-long board, a refresh or a range clicked twice can never paint over what the page now asks for
-const REQ = { board: 0, det: 0, trace: 0 };
+const REQ = { board: 0, det: 0, trace: 0, tg: 0 };
 const byId = () => new Map((S.b?.targets || []).map(x => [x.id, x]));
 const qsrc = () => S.src ? `&src=${encodeURIComponent(S.src)}` : "";
 
@@ -600,8 +667,14 @@ async function loadBoard() {
     if (e.message !== "sign in") setOffline(true);
   }
   $("#out").hidden = !S.b?.auth;
+  if (S.b?.version) {        // the version this server runs, linked to what changed in it
+    const ver = $("#ver");
+    ver.hidden = false; ver.textContent = "v" + S.b.version; ver.title = t("releaseNotes");
+    ver.href = `https://github.com/ST-DEVPT/smoketrace/releases/tag/v${S.b.version}`;
+  }
   renderSide(); favicon();
-  if (!S.id) renderDash();
+  if (!S.id && !S.tpage) renderDash();
+  if (S.tpage) renderSide();
 }
 async function refresh() {
   await loadBoard();
@@ -638,9 +711,20 @@ function route() {
   const m = path.match(/^\/t\/([^/]+)$/);
   document.body.classList.remove("drawer");
   $("#tip").hidden = true;
+  if (path === "/targets") {
+    if (S.id == null && !S.tpage) S.place = { y: scrollY, hm: $("#hmScroll")?.scrollTop || 0, tw: $("#tw")?.scrollTop || 0 };
+    Object.assign(S, { tpage: true, id: null, det: null, trace: null, traceFor: undefined, sel: null, hover: null, cmp: null });
+    REQ.det++; REQ.trace++;
+    window.scrollTo(0, 0);
+    renderSide(); renderTargets(); loadTargets();
+    $("#view h1")?.focus({ preventScroll: true });
+    return;
+  }
+  const leftTargets = S.tpage;
+  S.tpage = false;
   if (m) {
     const id = decodeURIComponent(m[1]), when = +p.get("at") || null;
-    if (S.id == null) S.place = { y: scrollY, hm: $("#hmScroll")?.scrollTop || 0, tw: $("#tw")?.scrollTop || 0 };   // leaving the overview
+    if (S.id == null && !leftTargets) S.place = { y: scrollY, hm: $("#hmScroll")?.scrollTop || 0, tw: $("#tw")?.scrollTop || 0 };   // leaving the overview
     if (S.id !== id) Object.assign(S, { id, det: null, detErr: null, trace: null, traceFor: undefined, sel: when, hover: null, cmp: null });
     else S.sel = when;
     window.scrollTo(0, 0);
@@ -648,7 +732,7 @@ function route() {
     $("#view h1")?.focus({ preventScroll: true });
     return;
   }
-  const back = S.id != null;
+  const back = S.id != null || leftTargets;
   S.f = { g: p.get("g") || "", st: csv(p.get("st")), p: csv(p.get("p")), rc: p.get("rc") === "1", q: p.get("q") || "", ids: csv(p.get("ids")) };
   $("#q").value = S.f.q;
   S.dash = dashHash();
@@ -707,7 +791,7 @@ const byWorst = (a, b) => SEV[worstOf(b.items)] - SEV[worstOf(a.items)] || a.nam
 function renderSide() {
   const el = $("#tree");
   if (!S.b) { el.innerHTML = ""; return; }
-  const list = S.b.targets, root = tree(list), cur = S.id ? S.det?.target.group ?? null : S.f.g;  // a target's page marks its group
+  const list = S.b.targets, root = tree(list), cur = S.tpage ? null : S.id ? S.det?.target.group ?? null : S.f.g;  // a target's page marks its group
   const ct = items => {
     const c = counts(items), bad = c.down + c.crit + c.warn;
     return `<span class="ct">${bad ? `<span class="bad">${icon(worstOf(items))}${bad}</span>` : ""}${items.length}</span>`;
@@ -719,8 +803,117 @@ function renderSide() {
         <span class="nm">${esc(n.name)}</span>${ct(n.items)}</button>
       ${kids.length && open ? `<div class="kids">${kids.map(nodeHtml).join("")}</div>` : ""}</div>`;
   };
-  el.innerHTML = `<button class="node" data-g="" aria-current="${cur === "" && !S.f.ids.size}"><span class="chev" style="visibility:hidden"></span><span class="nm">${t("overview")}</span>${ct(list)}</button>
+  el.innerHTML = `<button class="node" data-g="" aria-current="${!S.tpage && cur === "" && !S.f.ids.size}"><span class="chev" style="visibility:hidden"></span><span class="nm">${t("overview")}</span>${ct(list)}</button>
+    <a class="node" href="#/targets" aria-current="${!!S.tpage}"><span class="chev" style="visibility:hidden"></span><span class="nm">${t("targetsNav")}</span><span class="ct"></span></a>
     <div class="side-label">${t("groups")}</div>${[...root.kids.values()].sort(byWorst).map(nodeHtml).join("")}`;
+}
+
+// ---------- targets: the list, and editing it ----------
+const TG = { data: null, err: null, edit: null, q: "", saved: "", busy: false };   // edit: null, {} (new) or a target
+async function loadTargets() {
+  const tok = ++REQ.tg;
+  try { const d = await api("/api/targets"); if (tok !== REQ.tg) return; TG.data = d; TG.err = null; }
+  catch (e) { if (tok !== REQ.tg) return; TG.err = e.message; }
+  renderTargets();
+}
+async function postJSON(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (r.status === 401) { location.href = "/login"; throw new Error("sign in"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.field = j.field; throw e; }
+  return j;
+}
+function renderTargets() {
+  const v = $("#view");
+  if (!S.tpage) return;
+  v.dataset.view = "targets";
+  const d = TG.data;
+  const head = lede => `<div class="page-head"><div><h1 tabindex="-1">${t("targetsNav")}</h1><p class="lede">${lede}</p></div>
+    <div class="head-meta">${d?.editable && !TG.edit ? `<button class="btn primary" data-act="tadd">${t("tAdd")}</button>` : ""}</div></div>`;
+  if (!d) { v.innerHTML = head(TG.err ? `${esc(TG.err)} <button class="link" data-act="treload">${t("retry")}</button>` : '<span class="sk w3"></span>'); return; }
+  const lede = d.why === "password" ? t("tWhyPassword") : d.why === "demo" ? t("tWhyDemo")
+    : d.source === "page" ? t("tFromPage", `<span class="mono">${esc(d.file)}</span>`) : d.source === "smokeping" ? t("tFromSmokeping") : t("tFromIni");
+  v.innerHTML = head(lede) + (TG.edit ? targetForm(d) : "")
+    + `<div class="ttools"><input id="tq" type="search" value="${esc(TG.q)}" placeholder="${t("tFilter")}" aria-label="${t("tFilter")}" autocomplete="off">
+      <span class="count" id="tcount"></span><span class="grow"></span>${TG.saved ? `<span class="count">${esc(TG.saved)}</span>` : ""}</div><div id="tlist"></div>`;
+  renderTargetList();
+  if (TG.edit) $("#tform [name=" + (TG.edit.id ? "address" : "group") + "]")?.focus();
+}
+function renderTargetList() {
+  const d = TG.data, q = TG.q.trim().toLowerCase();
+  const list = d.targets.filter(x => !q || `${x.group} ${x.name} ${x.address}`.toLowerCase().includes(q));
+  const groups = new Map();
+  for (const x of list) { if (!groups.has(x.group)) groups.set(x.group, []); groups.get(x.group).push(x); }
+  const by = x => x.master === false && x.slaves?.length === 0 ? "—"
+    : [x.master !== false ? esc(d.sources[0]) : null, ...(x.slaves == null ? (d.sources.length > 1 ? [t("tAllAgents")] : []) : x.slaves.map(esc))].filter(Boolean).join(", ");
+  const lim = x => [x.loss_warn != null && `${t("warn")} ${pct(x.loss_warn)}`, x.loss_crit != null && `${t("crit")} ${pct(x.loss_crit)}`,
+    x.latency_warn != null && `> ${msU(x.latency_warn)}`].filter(Boolean).join(" · ") || '<span class="dim">—</span>';
+  const rows = [...groups].map(([g, xs]) => `<tr class="grp"><td colspan="6">${esc(g)} <span class="dim mono">${xs.length}</span></td></tr>`
+    + xs.map(x => `<tr><td><span class="nm">${esc(x.name)}</span></td><td class="mono">${esc(x.address)}</td><td class="hide-s">${x.probe.toUpperCase()}</td>
+      <td class="hide-s muted">${by(x)}</td><td class="hide-s muted">${lim(x)}</td>
+      <td class="act">${d.editable ? `<button class="link" data-tedit="${esc(x.id)}">${t("tEdit")}</button>` : ""}</td></tr>`).join("")).join("");
+  $("#tcount").textContent = t("shown", list.length, d.targets.length);
+  $("#tlist").innerHTML = `${list.length ? `<div class="tw" id="ttw"><table class="tlist"><thead><tr><th><button>${t("cTarget")}</button></th><th><button>${t("tAddress")}</button></th>
+      <th class="hide-s"><button>${t("tProbe")}</button></th><th class="hide-s"><button>${t("tProbedBy")}</button></th><th class="hide-s"><button>${t("tLimits")}</button></th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>` : empty(d.targets.length ? t("noMatchT") : t("noTargetsT"), d.editable && !d.targets.length ? t("tFirst") : "")}`;
+}
+function targetForm(d) {
+  const x = TG.edit, isNew = !x.id, agents = d.sources.slice(1), on = a => x.slaves == null || x.slaves.includes(a);
+  const groups = [...new Set(d.targets.map(y => y.group))].sort((a, b) => a.localeCompare(b, LOC));
+  const fld = (name, label, val, attrs = "", help = "", wide = false) => `<label class="fld ${wide ? "wide" : ""}"><span>${label}</span>
+    <input name="${name}" value="${esc(val ?? "")}" ${attrs}>${help ? `<small>${help}</small>` : ""}<small class="ferr" data-for="${name}"></small></label>`;
+  return `<form class="tform" id="tform" novalidate>
+    <h2>${isNew ? t("tAddTitle") : t("tEditTitle", esc(x.name))}</h2>
+    <div class="fgrid">
+      ${fld("group", t("cGroup"), x.group, 'list="tgroups" required autocomplete="off"', t("tGroupHelp"))}
+      ${fld("name", t("tName"), x.name, "required autocomplete=\"off\"")}
+      ${fld("address", t("tAddress"), x.address, 'class="mono" required autocomplete="off" spellcheck="false" placeholder="1.1.1.1"', t("tAddressHelp"), true)}
+      <div class="fld wide"><span>${t("tProbedBy")}</span><div class="checks">
+        <label><input type="checkbox" name="master" ${x.master !== false ? "checked" : ""}>${esc(d.sources[0])} ${t("tThisServer")}</label>
+        ${agents.map(a => `<label><input type="checkbox" name="agent" value="${esc(a)}" ${on(a) ? "checked" : ""}>${esc(a)}</label>`).join("")}</div>
+        ${agents.length ? `<small>${t("tAgentsHelp")}</small>` : ""}<small class="ferr" data-for="slaves"></small></div>
+      <div class="fld wide"><span>${t("tLimits")}</span><div class="three">
+        ${fld("loss_warn", t("tLossWarn"), x.loss_warn, `inputmode="decimal" placeholder="${S.b?.loss_warn ?? 10}"`)}
+        ${fld("loss_crit", t("tLossCrit"), x.loss_crit, `inputmode="decimal" placeholder="${S.b?.loss_crit ?? 20}"`)}
+        ${fld("latency_warn", t("tLatWarn"), x.latency_warn, `inputmode="decimal" placeholder="${t("tLatAuto")}"`)}</div>
+        <small>${t("tLimitsHelp")}</small></div>
+    </div>
+    <datalist id="tgroups">${groups.map(g => `<option value="${esc(g)}">`).join("")}</datalist>
+    ${d.source !== "page" ? `<p class="hint">${d.source === "smokeping" ? t("tMoveSmokeping") : t("tMoveIni")}</p>` : ""}
+    <p class="hint ferr-all" id="tformErr" role="alert"></p>
+    <div class="factions"><button class="btn primary" type="submit" ${TG.busy ? "disabled" : ""}>${t("tSave")}</button>
+      <button class="btn" type="button" data-act="tcancel">${t("tCancel")}</button><span class="grow"></span>
+      ${isNew ? "" : `<button class="btn danger" type="button" data-act="tdel">${t("tRemove")}</button>`}</div>
+  </form>`;
+}
+function formTarget() {
+  const f = $("#tform"), val = n => f.elements[n].value.trim(), num = n => val(n) === "" ? null : Number(val(n).replace(",", "."));
+  const agents = [...f.querySelectorAll("[name=agent]")], picked = agents.filter(c => c.checked).map(c => c.value);
+  return { id: TG.edit.id || null, group: val("group"), name: val("name"), address: val("address"), master: f.elements.master.checked,
+    slaves: picked.length === agents.length ? null : picked,           // every agent, including ones added later
+    loss_warn: num("loss_warn"), loss_crit: num("loss_crit"), latency_warn: num("latency_warn") };
+}
+async function saveTarget(op) {
+  const body = op === "delete" ? { op, id: TG.edit.id } : { op, ...formTarget() };
+  if (op === "save" && Object.entries(body).some(([k, v]) => typeof v === "number" && Number.isNaN(v))) {
+    const k = Object.keys(body).find(k => Number.isNaN(body[k]));
+    return showFieldError(k, t("tNumber"));
+  }
+  TG.busy = true;
+  try {
+    const d = await postJSON("/api/targets", body);
+    TG.data = d; TG.saved = op === "delete" ? t("tRemoved", TG.edit.name) : t("tSaved", body.name); TG.edit = null;
+    renderTargets(); loadBoard();
+  } catch (e) {
+    if (e.message !== "sign in") showFieldError(e.field, e.message);
+  } finally { TG.busy = false; }
+}
+function showFieldError(field, msg) {
+  document.querySelectorAll("#tform .ferr").forEach(el => { el.textContent = ""; });
+  document.querySelectorAll("#tform [aria-invalid]").forEach(el => el.removeAttribute("aria-invalid"));
+  const slot = field && $(`#tform .ferr[data-for="${field}"]`);
+  if (slot) { slot.textContent = msg; $(`#tform [name="${field}"]`)?.setAttribute("aria-invalid", "true"); $(`#tform [name="${field}"]`)?.focus(); }
+  else $("#tformErr").textContent = msg;
 }
 
 // ---------- filtering ----------
@@ -750,7 +943,7 @@ function groupsOf(list) {
 const empty = (title, body) => `<div class="empty"><h3>${title}</h3><p>${body}</p></div>`;
 function renderDash() {
   const v = $("#view");
-  if (S.id) return;
+  if (S.id || S.tpage) return;
   const head = (title, lede) => `<div class="page-head"><div><h1>${title}</h1>${lede ? `<p class="lede">${lede}</p>` : ""}</div></div>`;
   if (!S.b) {          // the final layout, each value a flat bar at its size; nothing moves when the data lands
     v.dataset.view = "loading";
@@ -758,7 +951,7 @@ function renderDash() {
       <section class="kpis">${'<div class="kpi"><div class="cap"><span class="sk"></span></div><div class="v"><span class="sk" style="height:28px;width:3ch"></span></div><div class="s"><span class="sk w2"></span></div></div>'.repeat(6)}</section>`;
     return;
   }
-  if (!S.b.targets.length) { v.dataset.view = "empty"; v.innerHTML = head(t("overview")) + empty(t("noTargetsT"), t("noTargetsB")); return; }
+  if (!S.b.targets.length) { v.dataset.view = "empty"; v.innerHTML = head(t("overview")) + empty(t("noTargetsT"), `${t("noTargetsB")} <a href="#/targets">${t("tOpen")}</a>`); return; }
   const keepTop = $("#hmScroll")?.scrollTop || 0, keepTw = $("#tw")?.scrollTop || 0;   // a refresh keeps the place
   v.dataset.view = "dash";
   const b = S.b, sc = scoped(), list = shownList();
@@ -1533,7 +1726,7 @@ function renderRaw() {
 
 // ---------- events ----------
 document.addEventListener("click", e => {
-  const b = e.target.closest("[data-tog],[data-act],[data-src],[data-brange],[data-drange],[data-view],[data-mode],[data-tl],[data-vs],[data-fst],[data-fp],[data-frc],[data-st],[data-rc],[data-g],[data-sortk],[data-ids],[data-here],[data-open]");
+  const b = e.target.closest("[data-tedit],[data-tog],[data-act],[data-src],[data-brange],[data-drange],[data-view],[data-mode],[data-tl],[data-vs],[data-fst],[data-fp],[data-frc],[data-st],[data-rc],[data-g],[data-sortk],[data-ids],[data-here],[data-open]");
   if (!b) { if (document.body.classList.contains("drawer") && !e.target.closest(".side")) document.body.classList.remove("drawer"); return; }
   const ds = b.dataset;
   if (ds.tog != null) { S.open.has(ds.tog) ? S.open.delete(ds.tog) : S.open.add(ds.tog); store.set("treeOpen", JSON.stringify([...S.open])); renderSide(); return; }
@@ -1541,6 +1734,11 @@ document.addEventListener("click", e => {
   if (ds.act === "theme") { const v = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = v; store.set("theme", v); themeBtn(); S.id ? (drawChart(), renderHops()) : renderDash(); return; }
   if (ds.act === "lang") { store.set("lang", LANG === "pt" ? "en" : "pt"); location.reload(); return; }
   if (ds.act === "retry") { refresh(); return; }
+  if (ds.act === "tadd") { TG.edit = { group: S.f.g || "", name: "", address: "", master: true, slaves: null }; TG.saved = ""; renderTargets(); return; }
+  if (ds.act === "tcancel") { TG.edit = null; renderTargets(); return; }
+  if (ds.act === "treload") { loadTargets(); return; }
+  if (ds.act === "tdel") { if (confirm(t("tConfirm", TG.edit.name))) saveTarget("delete"); return; }
+  if (ds.tedit) { TG.edit = { ...TG.data.targets.find(x => x.id === ds.tedit) }; TG.saved = ""; renderTargets(); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
   if (ds.act === "clearq") { $("#q").value = ""; setFilters(f => { f.q = ""; }); return; }
   if (ds.act === "clearids") { setFilters(f => { f.ids.clear(); }); return; }
   if (ds.act === "clear") { $("#q").value = ""; setFilters(f => { f.st.clear(); f.p.clear(); f.ids.clear(); f.rc = false; f.q = ""; }); return; }
@@ -1567,6 +1765,12 @@ document.addEventListener("click", e => {
   if (ds.g != null) { e.preventDefault(); if (ds.g) S.open.add(ds.g); setFilters(f => { f.g = ds.g; f.ids.clear(); }); document.body.classList.remove("drawer"); return; }
   if (ds.here) { pickMoment(+ds.at); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
   if (ds.open) { openTarget(ds.open, ds.at ? +ds.at : null); return; }
+});
+document.addEventListener("submit", e => { if (e.target.id === "tform") { e.preventDefault(); saveTarget("save"); } });
+document.addEventListener("input", e => {
+  if (e.target.id !== "tq") return;
+  TG.q = e.target.value;
+  renderTargetList();
 });
 document.addEventListener("change", e => { if (e.target.id === "sort") { S.sort = e.target.value; store.set("sort", S.sort); renderDash(); } });
 document.addEventListener("scroll", e => { if (e.target.id === "hmScroll") { S.hm = null; $("#tip").hidden = true; drawHeat(); } }, true);
