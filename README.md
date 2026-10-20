@@ -242,7 +242,7 @@ Everything is an environment variable in `docker-compose.yml` (or a flag without
 | `PORT` | `8099` | The port the page listens on. |
 | `BIND` | `0.0.0.0` in Docker, `127.0.0.1` otherwise | The address the page listens on. |
 | `TZ` | UTC | The time zone for the logs, e.g. `Europe/Lisbon`. |
-| `AGENTS` | none | The remote sites: `porto=token,office=token`. `name=token@http://site:8100` when the server fetches from the site. |
+| `AGENTS` | none | The remote sites: `porto=token,office=token`. `name=token@http://site:8100` when the server fetches from the site. A site added later probes every target; untick it on a target to leave that one out. |
 | `SMOKEPING_CONFIG` | none | Read SmokePing's config from this folder or file ([details](docs/smokeping.md)). |
 | `TARGETS` | `/data/targets.ini` | The hand-written targets file; the page keeps its list next to it, in `targets.json`. |
 | `DB` | `/data/smoketrace.db` | The database. 30 days are kept. |
@@ -263,6 +263,8 @@ Everything is an environment variable in `docker-compose.yml` (or a flag without
 | Option | Default | What it does |
 | --- | --- | --- |
 | `METRICS_TOKEN` | none | `/metrics` asks for it as a bearer token (and is closed without it when `PASSWORD` is set). |
+| `STEP` | `300` | Seconds between two rounds of pings (`180`, `3m`), 60 to 3600. Wins over SmokePing's `step`. Agents follow the server. |
+| `TRACE_STEP` | every round | Seconds between two traceroutes of a target (`900`, `15m`), rounded to whole rounds. A target that starts losing pings is traced the next round anyway. Agents follow the server. |
 | `TRACE_PARALLEL` | `16` | Traceroutes at once, 1 to 64. Fewer use less CPU; more trace every target more often. |
 | `ASN` | `1` | `0`: no AS numbers and operator names on hops. |
 
@@ -283,7 +285,8 @@ Everything is an environment variable in `docker-compose.yml` (or a flag without
 | `IMPORT_RRD` | Import SmokePing's history from this folder ([how](docs/smokeping.md#bring-the-history-along)). |
 
 The round length (5 minutes) and the pings per round (20) are SmokePing's defaults; with SmokePing's config, its
-`*** Database ***` sets them.
+`*** Database ***` sets them, and `STEP` wins over both. For pings every 3 minutes and a traceroute of each target
+every 15: `STEP: 3m` and `TRACE_STEP: 15m`.
 
 ## Common problems
 

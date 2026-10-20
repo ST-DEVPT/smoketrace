@@ -326,6 +326,10 @@ details .tw { max-height: 420px; overflow: auto; margin-bottom: 18px; }
 .ttools { display: flex; align-items: center; gap: 12px; margin: 22px 0 12px; }
 .ttools input { width: 320px; max-width: 100%; height: 32px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg); font-size: 13px; outline: none; }
 .ttools input:focus { border-color: var(--ink-3); }
+dialog.tdlg { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--ink); }
+dialog.tdlg::backdrop { background: rgb(0 0 0 / .45); }
+dialog.tdlg .tform { margin: 0; box-shadow: 0 18px 50px rgb(0 0 0 / .35); }
+td.act .link, .card .ft .link { font-size: 12.5px; }
 table.tlist td { height: 44px; }
 table.tlist td.act { width: 1%; text-align: right; }
 .tnav { display: grid; gap: 1px; margin-bottom: 4px; }
@@ -393,6 +397,7 @@ table.tlist td.act { width: 1%; text-align: right; }
   <div id="view"></div>
 </main>
 <div class="tip" id="tip" hidden></div>
+<dialog class="tdlg" id="tdlg"></dialog>
 
 <script>
 "use strict";
@@ -415,7 +420,7 @@ const I18N = {
     ago: (n, u) => `${n} ${u} ago`, updated: a => `Updated ${a}`, offlineLive: "Offline",
     offline: "No connection to smoketrace. What you see may be out of date.", retry: "Retry now",
     search: "Target, group or IP", groups: "Groups", all: "All targets", seenFrom: "Seen from", overview: "Overview", targetsH: "Targets",
-    nTargets: n => pl(n, "target", "targets"), reporting: (a, b) => `${a} of ${b} sites reporting`, lastRoundAgo: a => `last round ${a}`, every: d => `a round every ${d}`,
+    nTargets: n => pl(n, "target", "targets"), reporting: (a, b) => `${a} of ${b} sites reporting`, lastRoundAgo: a => `last round ${a}`, every: d => `a round every ${d}`, traceEvery: d => `traceroutes every ${d}`,
     colourBy: "Colour by", usualK: "Usual", menu: "Groups",
     health: "OK", downK: "Down", degraded: "Degraded", noDataK: "No data", degradedS: (w, c) => `${w} warning · ${c} critical`,
     latency: "Median latency", latencyS: "median of the targets shown", worst: "Worst loss", none: "none",
@@ -464,7 +469,7 @@ const I18N = {
     tAllAgents: "every agent", tFilter: "Filter by name, group or address", tSave: "Save", tCancel: "Cancel", tRemove: "Remove",
     tGroupHelp: "Pick one or type a new one; “Sites / Lisbon” nests Lisbon under Sites.",
     tAddressHelp: "An IP address or host name to ping; tcp://host:443 to time a TCP connection; dns://9.9.9.9/example.org to time a DNS answer.",
-    tAgentsHelp: "With every agent ticked, agents added later probe it too.",
+    tAgentsHelp: "Agents added later probe it too; untick one to leave it out.",
     tLossWarn: "Warn at loss %", tLossCrit: "Critical at loss %", tLatWarn: "Warn above ms", tLatAuto: "from its usual",
     tLimitsHelp: "Empty fields use the defaults.", tNumber: "A number, please",
     tSaved: n => `Saved ${n}. It is probed from the next round.`, tRemoved: n => `Removed ${n}. Its history stays until it ages out.`,
@@ -497,7 +502,7 @@ const I18N = {
     ago: (n, u) => `há ${n} ${u}`, updated: a => `Atualizado ${a}`, offlineLive: "Sem ligação",
     offline: "Sem ligação ao smoketrace. Os dados mostrados podem estar desatualizados.", retry: "Tentar agora",
     search: "Alvo, grupo ou IP", groups: "Grupos", all: "Todos os alvos", seenFrom: "Visto de", overview: "Visão geral", targetsH: "Alvos",
-    nTargets: n => pl(n, "alvo", "alvos"), reporting: (a, b) => `${a} de ${b} locais a reportar`, lastRoundAgo: a => `última ronda ${a}`, every: d => `uma ronda a cada ${d}`,
+    nTargets: n => pl(n, "alvo", "alvos"), reporting: (a, b) => `${a} de ${b} locais a reportar`, lastRoundAgo: a => `última ronda ${a}`, every: d => `uma ronda a cada ${d}`, traceEvery: d => `traceroutes a cada ${d}`,
     colourBy: "Cor por", usualK: "Normal", menu: "Grupos",
     health: "OK", downK: "Em baixo", degraded: "Degradados", noDataK: "Sem dados", degradedS: (w, c) => `${w} aviso · ${c} crítico`,
     latency: "Latência mediana", latencyS: "mediana dos alvos mostrados", worst: "Pior perda", none: "nenhuma",
@@ -546,7 +551,7 @@ const I18N = {
     tAllAgents: "todos os agentes", tFilter: "Filtrar por nome, grupo ou endereço", tSave: "Guardar", tCancel: "Cancelar", tRemove: "Remover",
     tGroupHelp: "Escolha um ou escreva um novo; “Sites / Lisboa” põe Lisboa dentro de Sites.",
     tAddressHelp: "Um IP ou nome a pingar; tcp://host:443 para medir uma ligação TCP; dns://9.9.9.9/example.org para medir uma resposta DNS.",
-    tAgentsHelp: "Com todos os agentes marcados, os agentes que se juntarem depois também o medem.",
+    tAgentsHelp: "Os agentes que se juntarem depois também o medem; desmarque um para o deixar de fora.",
     tLossWarn: "Aviso a partir de % de perda", tLossCrit: "Crítico a partir de % de perda", tLatWarn: "Aviso acima de ms", tLatAuto: "pelo seu normal",
     tLimitsHelp: "Campos vazios usam os valores por omissão.", tNumber: "Tem de ser um número",
     tSaved: n => `${n} guardado. É medido a partir da próxima ronda.`, tRemoved: n => `${n} removido. O histórico fica até expirar.`,
@@ -701,7 +706,7 @@ function setFilters(fn) {
   fn(S.f);
   S.tshown = 0;
   S.dash = dashHash();
-  if (S.id) { location.hash = S.dash; return; }
+  if (S.id || S.tpage) { location.hash = S.dash; return; }      // from a target or the targets page: go there
   history.replaceState(null, "", S.dash);
   renderSide(); renderDash();
 }
@@ -711,6 +716,7 @@ function route() {
   const m = path.match(/^\/t\/([^/]+)$/);
   document.body.classList.remove("drawer");
   $("#tip").hidden = true;
+  if ($("#tdlg").open) { TG.edit = null; $("#tdlg").close(); }
   if (path === "/targets") {
     if (S.id == null && !S.tpage) S.place = { y: scrollY, hm: $("#hmScroll")?.scrollTop || 0, tw: $("#tw")?.scrollTop || 0 };
     Object.assign(S, { tpage: true, id: null, det: null, trace: null, traceFor: undefined, sel: null, hover: null, cmp: null });
@@ -886,6 +892,24 @@ function targetForm(d) {
       ${isNew ? "" : `<button class="btn danger" type="button" data-act="tdel">${t("tRemove")}</button>`}</div>
   </form>`;
 }
+// edit a target (or add one, `id` null) where you are: inline on the targets page, in a dialog anywhere else
+async function editTarget(id, group = "") {
+  if (!TG.data || (id && !TG.data.targets.some(x => x.id === id))) {
+    try { TG.data = await api("/api/targets"); } catch (e) { return; }
+  }
+  const x = id ? TG.data.targets.find(y => y.id === id) : { group, name: "", address: "", master: true, slaves: null };
+  if (!x || !TG.data.editable) return;
+  TG.edit = { ...x }; TG.saved = "";
+  if (S.tpage) { renderTargets(); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+  const dlg = $("#tdlg");
+  dlg.innerHTML = targetForm(TG.data);
+  if (!dlg.open) dlg.showModal();
+  $("#tform [name=" + (TG.edit.id ? "address" : TG.edit.group ? "name" : "group") + "]")?.focus();
+}
+function closeEditor() {
+  TG.edit = null;
+  if ($("#tdlg").open) $("#tdlg").close(); else renderTargets();
+}
 function formTarget() {
   const f = $("#tform"), val = n => f.elements[n].value.trim(), num = n => val(n) === "" ? null : Number(val(n).replace(",", "."));
   const agents = [...f.querySelectorAll("[name=agent]")], picked = agents.filter(c => c.checked).map(c => c.value);
@@ -902,8 +926,11 @@ async function saveTarget(op) {
   TG.busy = true;
   try {
     const d = await postJSON("/api/targets", body);
-    TG.data = d; TG.saved = op === "delete" ? t("tRemoved", TG.edit.name) : t("tSaved", body.name); TG.edit = null;
-    renderTargets(); loadBoard();
+    TG.data = d; TG.saved = op === "delete" ? t("tRemoved", TG.edit.name) : t("tSaved", body.name);
+    const gone = op === "delete" && TG.edit.id === S.id;
+    closeEditor();
+    if (gone) toOverview();
+    else { await loadBoard(); if (S.id) loadDetail(); }
   } catch (e) {
     if (e.message !== "sign in") showFieldError(e.field, e.message);
   } finally { TG.busy = false; }
@@ -962,10 +989,11 @@ function renderDash() {
     `<span>/</span><a href="#" data-g="${esc(parts.slice(0, i + 1).join(" / "))}">${esc(part)}</a>`).join("")}</nav>` : "";
   const srcs = b.sources, live = srcs.filter(s => s.last_ts && b.now - s.last_ts <= 3 * b.step).length;
   const lede = [t("nTargets", sc.length), srcs.length > 1 ? t("reporting", live, srcs.length)
-      : t("lastRoundAgo", srcs[0]?.last_ts ? ago(b.now - srcs[0].last_ts) : "—"), t("every", dur(b.step))].join(" · ");
+      : t("lastRoundAgo", srcs[0]?.last_ts ? ago(b.now - srcs[0].last_ts) : "—"), t("every", dur(b.step)),
+    b.trace_step > b.step ? t("traceEvery", dur(b.trace_step)) : ""].filter(Boolean).join(" · ");
   v.innerHTML = `
     <div class="page-head"><div>${crumbs}<h1 tabindex="-1">${esc(title)}</h1><p class="lede">${finding(sc)}</p></div>
-      <div class="head-meta" title="${esc(lede)}">${liveHtml()}${refreshBtn()}${srcSeg()}</div></div>
+      <div class="head-meta" title="${esc(lede)}">${b.editable ? `<button class="btn" data-act="tadd">${t("tAdd")}</button>` : ""}${liveHtml()}${refreshBtn()}${srcSeg()}</div></div>
     <section class="kpis">${kpis(sc)}</section>
     <div class="dash">
       <section class="panel" id="mainp">${targetsHead(sc, list)}${mainView(list)}</section>
@@ -1214,11 +1242,11 @@ function rowHtml(x, cols) {
     <td class="num mono" style="${x.loss > 0 ? "font-weight:700" : ""}">${pct(x.loss)}</td>
     <td class="hide-s"><div class="strip" style="background:${stripCss(x, cols)}"></div></td>
     <td class="hide-s">${x.route_changes ? `<span class="st">${SWAP}${x.route_changes}</span>` : '<span class="dim">—</span>'}</td>
-    ${seen}</tr>`;
+    ${seen}${S.b.editable ? `<td class="act"><button class="link" data-tedit="${esc(x.id)}">${t("tEdit")}</button></td>` : ""}</tr>`;
 }
 function tableHtml(list) {
   const sortBtn = (k, l, cls = "") => `<th class="${cls}"><button data-sortk="${k}" aria-pressed="${S.sort === k}">${t(l)}</button></th>`;
-  const multi = S.b.sources.length > 1, span = 7 + (multi ? 1 : 0) + (S.grouped ? 0 : 1);
+  const multi = S.b.sources.length > 1, span = 7 + (multi ? 1 : 0) + (S.grouped ? 0 : 1) + (S.b.editable ? 1 : 0);
   TCTX = { span, cols: { "0": cssv("--cell-ok"), "1": cssv("--warn"), "2": cssv("--crit"), "3": cssv("--down"), ".": cssv("--cell-none") } };
   TROWS = S.grouped ? groupsOf(list).flatMap(([g, items]) => [{ g, items }, ...items.map(x => ({ x }))]) : list.map(x => ({ x }));
   const n = Math.max(TCHUNK, S.tshown);
@@ -1227,7 +1255,7 @@ function tableHtml(list) {
     ${sortBtn("sev", "status")}${sortBtn("name", "cTarget")}${S.grouped ? "" : `<th><button>${t("cGroup")}</button></th>`}
     ${sortBtn("lat", "cMedian", "num")}${sortBtn("jit", "cJitter", "num hide-s")}${sortBtn("loss", "cLoss", "num")}
     <th class="hide-s"><button>${t("cStrip")}</button></th>${sortBtn("rc", "cRoutes", "hide-s")}${multi ? `<th><button>${t("cSeen")}</button></th>` : ""}
-    </tr></thead><tbody>${body}</tbody></table></div>`;
+    ${S.b.editable ? "<th></th>" : ""}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 function trow(r) {
   if (r.x) return rowHtml(r.x, TCTX.cols);
@@ -1261,7 +1289,7 @@ function cardsHtml(list) {
       <div class="cmain"><div class="big ${up ? "hot" : ""}">${x.median == null ? `<span class="nv">${t(x.status === "stale" ? "noData" : "noReply")}</span>` : `${ms(x.median)}<small>ms</small>`}</div>
         <dl><div><dt>${t("cLoss")}</dt><dd>${pct(x.loss)}</dd></div><div><dt>${t("cJitter")}</dt><dd>${msU(x.jitter)}</dd></div><div><dt>${t("usualK")}</dt><dd>${msU(x.baseline)}</dd></div></dl></div>
       <canvas height="56"></canvas>
-      <div class="ft"><span class="mono">${hostOf(x)}</span>${x.by_source ? `<span>${Object.entries(x.by_source).map(([s, st]) => `<span title="${esc(s)}: ${t(st)}">${icon(st)}</span>`).join(" ")}</span>` : ""}</div>
+      <div class="ft"><span class="mono">${hostOf(x)}</span>${S.b.editable ? `<button class="link" data-tedit="${esc(x.id)}">${t("tEdit")}</button>` : ""}${x.by_source ? `<span>${Object.entries(x.by_source).map(([s, st]) => `<span title="${esc(s)}: ${t(st)}">${icon(st)}</span>`).join(" ")}</span>` : ""}</div>
     </article>`;
   }).join("")}</div>${list.length > shown.length ? `<div class="more"><button class="btn" data-act="morecards">${t("loadMore", Math.min(60, list.length - shown.length))}</button></div>` : ""}`;
 }
@@ -1424,7 +1452,7 @@ function renderDetail() {
   const crumbs = x.group.split(" / ").map((part, i, a) => `<span>/</span><a href="#/?g=${encodeURIComponent(a.slice(0, i + 1).join(" / "))}">${esc(part)}</a>`).join("");
   $("#dhead").innerHTML = `<div><nav class="crumbs"><a href="${S.dash}" data-act="overview">${t("overview")}</a>${crumbs}</nav><h1 tabindex="-1">${esc(x.name)}</h1>
       <p class="lede"><span class="mono">${hostOf(x)}</span> · ${targetFinding(d)}</p></div>
-    <div class="head-meta">${pill(x.status)}${liveHtml()}${refreshBtn()}${srcSeg()}</div>`;
+    <div class="head-meta">${pill(x.status)}${S.b?.editable ? `<button class="btn" data-tedit="${esc(x.id)}">${t("tEdit")}</button>` : ""}${liveHtml()}${refreshBtn()}${srcSeg()}</div>`;
   const rangeLbl = DRANGES.find(r => r[0] === S.drange)?.[1] || "";
   const tile = (i, k, val, s, hot) => `<div class="kpi ${hot ? "hot" : ""}" ${hot ? `style="--c:var(--${hot})"` : ""}><div class="cap">${k}</div><div class="v">${val}</div><div class="s">${s}</div></div>`;
   const d2 = x.median != null && x.baseline ? x.median - x.baseline : 0;
@@ -1734,11 +1762,11 @@ document.addEventListener("click", e => {
   if (ds.act === "theme") { const v = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = v; store.set("theme", v); themeBtn(); S.id ? (drawChart(), renderHops()) : renderDash(); return; }
   if (ds.act === "lang") { store.set("lang", LANG === "pt" ? "en" : "pt"); location.reload(); return; }
   if (ds.act === "retry") { refresh(); return; }
-  if (ds.act === "tadd") { TG.edit = { group: S.f.g || "", name: "", address: "", master: true, slaves: null }; TG.saved = ""; renderTargets(); return; }
-  if (ds.act === "tcancel") { TG.edit = null; renderTargets(); return; }
+  if (ds.act === "tadd") { editTarget(null, S.tpage ? "" : S.f.g); return; }
+  if (ds.act === "tcancel") { closeEditor(); return; }
   if (ds.act === "treload") { loadTargets(); return; }
   if (ds.act === "tdel") { if (confirm(t("tConfirm", TG.edit.name))) saveTarget("delete"); return; }
-  if (ds.tedit) { TG.edit = { ...TG.data.targets.find(x => x.id === ds.tedit) }; TG.saved = ""; renderTargets(); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+  if (ds.tedit) { editTarget(ds.tedit); return; }
   if (ds.act === "clearq") { $("#q").value = ""; setFilters(f => { f.q = ""; }); return; }
   if (ds.act === "clearids") { setFilters(f => { f.ids.clear(); }); return; }
   if (ds.act === "clear") { $("#q").value = ""; setFilters(f => { f.st.clear(); f.p.clear(); f.ids.clear(); f.rc = false; f.q = ""; }); return; }
@@ -1818,7 +1846,10 @@ view.addEventListener("focusout", e => { if (e.target.id === "chart") setHover(n
 view.addEventListener("toggle", e => { if (e.target.id === "rawd" && e.target.open) renderRaw(); }, true);
 let qTimer = 0;
 $("#q").addEventListener("input", e => { clearTimeout(qTimer); qTimer = setTimeout(() => setFilters(f => { f.q = e.target.value; }), 150); });
+$("#tdlg").addEventListener("close", () => { TG.edit = null; });
+$("#tdlg").addEventListener("click", e => { if (e.target.id === "tdlg") closeEditor(); });   // the backdrop
 document.addEventListener("keydown", e => {
+  if ($("#tdlg").open) return;
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
   if (e.key === "/" && !typing) { e.preventDefault(); $("#q").focus(); }
   else if (e.key === "Escape" && typing) $("#q").blur();

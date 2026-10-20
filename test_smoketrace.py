@@ -80,6 +80,56 @@ def test_trace_plan():
     assert st.lost({"a": [1.0, None], "b": [1.0, 2.0]}) == {"a"}
 
 
+def test_trace_step():
+    ts, few = 1_000_200, [target(f"t{i}", f"10.0.0.{i}") for i in range(10)]
+    old = st.TRACE_STEP
+    try:
+        st.TRACE_STEP = st.STEP * 5            # pings every round, each target traced every fifth
+        plans = [st.trace_plan(few, ts + r * st.STEP) for r in range(5)]
+        assert all(len(p) == 2 for p in plans) and len({t["id"] for p in plans for t in p}) == 10
+        assert {t["id"] for t in st.trace_plan(few, ts, lossy={"t9"})} >= {"t9"}          # loss starting: out of turn
+        assert st.steps()["trace_step"] == st.STEP * 5
+        st.take_steps({"step": 180, "pings": 20})                                         # an older server: no TRACE_STEP
+        assert st.TRACE_STEP is None and st.trace_plan(few, ts) == few
+    finally:
+        st.TRACE_STEP, st.STEP = old, st.DEFAULT_STEP
+    assert [st.duration(v, "X") for v in ("180", "3m", "15m", "90s", "1h")] == [180, 180, 900, 90, 3600]
+    try:
+        st.duration("soon", "TRACE_STEP")
+        raise AssertionError("accepted a bad duration")
+    except SystemExit as e:
+        assert "TRACE_STEP" in str(e)
+    lossy = st.Lossy()
+    lossy.update({"a": [None], "b": [1.0]})
+    assert lossy.fresh == {"a"}
+    lossy.update({"a": [None], "b": [None]})
+    assert lossy.fresh == {"b"}                # "a" kept losing: traced in its turn, not every round
+
+
+def test_new_agents_probe_every_target():
+    ts = [target("a", slaves=["porto"]), target("b", slaves=[]), target("c")]
+    assert st.add_new_agents(ts, ["porto", "lisboa"], None) == ["lisboa"]       # porto is named, lisboa is new
+    assert [t["slaves"] for t in ts] == [["porto", "lisboa"], ["lisboa"], None]
+    ts = [target("a", slaves=["porto"]), target("b", slaves=[])]
+    assert st.add_new_agents(ts, ["porto", "lisboa"], {"porto", "lisboa"}) == []  # lisboa taken off on purpose
+    assert ts[1]["slaves"] == []
+    assert st.add_new_agents([target("c")], ["porto"], None) == []                # every agent probes it already
+    with tempfile.TemporaryDirectory() as d:
+        ini, js = Path(d, "targets.ini"), Path(d, "targets.json")
+        ini.write_text("[g]\n", encoding="utf-8")
+        st.save_json_targets(js, [target("a", slaves=["porto"]), target("b", slaves=[])])
+        body = json.loads(js.read_text(encoding="utf-8"))
+        del body["agents"]                     # a targets.json from before the agents list
+        js.write_text(json.dumps(body), encoding="utf-8")
+        cfg = st.load_config(args(targets=ini, agents="porto=" + "p" * 24 + ",faro=" + "f" * 24))
+        assert [t["slaves"] for t in cfg["targets"]] == [["porto", "faro"], ["faro"]]
+        assert json.loads(js.read_text(encoding="utf-8"))["agents"] == ["faro", "porto"]   # remembered
+        cfg["targets"][1]["slaves"] = []       # faro taken off b on the page
+        st.save_json_targets(js, cfg["targets"], ["porto", "faro"])
+        cfg = st.load_config(args(targets=ini, agents="porto=" + "p" * 24 + ",faro=" + "f" * 24))
+        assert cfg["targets"][1]["slaves"] == []                                            # and it stays off
+
+
 def test_parse_fping():
     out = st.parse_fping("1.1.1.1 : 12.10 - 11.90\n"
                          "ICMP Host Unreachable from 10.0.0.1 for ICMP Echo sent to 10.0.0.9\n"

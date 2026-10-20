@@ -2,6 +2,24 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.9.0] - 2026-10-21
+
+- **Edit a target where you see it.** With `PASSWORD` set, a target's page has an *Edit* button, the table and the
+  cards have an *Edit* link on every row, and a group's page has *Add target* with the group filled in. The same form
+  as on the Targets page opens over the page you are on; saving keeps you there, removing a target from its own page
+  goes back to the overview.
+- **New agents probe every target.** An agent no target names yet (one just added to `AGENTS`, or a SmokePing slave
+  that no `slaves =` line mentions) is added to every target, including SmokePing targets that listed only other
+  agents or none. `targets.json` now remembers the agents it has seen, so an agent you untick on a target stays off
+  after a restart.
+- **Pings and traceroutes on their own clocks**: `STEP` sets the time between rounds of pings (`3m`, wins over
+  SmokePing's `step`) and `TRACE_STEP` the time between two traceroutes of a target (`15m`); each round traces its
+  share. A target that starts losing pings is traced the next round out of turn, once: one that loses pings every
+  round, like a router that rate-limits ICMP, is traced in its turn like the rest. Agents take both from the server.
+  The start-up log and the overview's round line say both.
+- **Navigation**: a group or *Overview* picked in the sidebar while on the Targets page now opens it; before, the
+  address changed and the Targets page stayed.
+
 ## [0.8.0] - 2026-10-21
 
 - **Edit targets on the page.** A *Targets* page lists every target by group, and with `PASSWORD` set you can add,

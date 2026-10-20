@@ -44,12 +44,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.8.0"           # the top of CHANGELOG.md says the same; a test checks
+VERSION = "0.9.0"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
 MTR_CYCLES = 10
 TRACE_PARALLEL = 16         # mtr at once at most: each raw socket sees every ICMP reply of the others (CPU ~ n²)
+TRACE_STEP = None           # seconds between two traceroutes of a target (TRACE_STEP); None: every round
+STEP_ENV = None             # STEP from the environment: wins over SmokePing's *** Database *** step
 RETENTION_DAYS = 30         # ponytail: raw rows, no RRD consolidation; ~1 KB per trace, a few GB at 500 targets
 LOSS_WARN, LOSS_CRIT = 10.0, 20.0       # % lost in the last round: 2 of 20 pings warn, 4 are critical; per target too
 LAT_FACTOR, LAT_MARGIN = 1.5, 10.0      # warn when median > 24 h baseline * 1.5 + 10 ms
@@ -107,6 +109,14 @@ def check_target(t):
     if t["probe"] == "dns" and not (isinstance(t.get("lookup"), str) and LOOKUP_RE.fullmatch(t["lookup"])):
         raise ValueError(f"bad DNS lookup {t.get('lookup')!r}")
     return t
+
+
+def duration(value, name):
+    """`180`, `180s`, `3m` or `1h` -> seconds; SystemExit names the variable when it is not one."""
+    m = re.fullmatch(r"\s*(\d+)\s*([smh]?)\s*", str(value).lower())
+    if not m:
+        raise SystemExit(f"{name}={value!r}: seconds, or a number with s, m or h (180, 3m, 1h)")
+    return int(m[1]) * {"": 1, "s": 1, "m": 60, "h": 3600}[m[2]]
 
 
 def parse_host(value):
@@ -179,20 +189,26 @@ def target_from(d, tid):
 
 
 def load_json_targets(path):
-    """targets.json, the list the page edits: {"targets": [{id, group, name, address, ...}]}."""
+    """targets.json, the list the page edits: {"targets": [{id, group, name, address, ...}], "agents": [...]}.
+    -> (targets, the agents it already knew, or None when it predates that list)"""
     try:
-        items = json.loads(path.read_text(encoding="utf-8"))["targets"]
-        targets = [target_from(d, d["id"]) for d in items]
-    except (OSError, ValueError, KeyError, TypeError) as e:
+        body = json.loads(path.read_text(encoding="utf-8"))
+        targets = [target_from(d, d["id"]) for d in body["targets"]]
+        known = body.get("agents")
+        if known is not None and not (isinstance(known, list) and all(isinstance(x, str) for x in known)):
+            raise ValueError("agents: a list of agent names")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
         raise SystemExit(f"{path}: {e}")
     if len({t["id"] for t in targets}) != len(targets):
         raise SystemExit(f"{path}: two targets share an id")
-    return targets
+    return targets, known
 
 
-def save_json_targets(path, targets):
-    """Written whole and swapped in, so a reader never sees half a file."""
-    body = {"targets": [{"id": t["id"], **{k: (address(t) if k == "address" else t[k]) for k in EDITABLE}} for t in targets]}
+def save_json_targets(path, targets, agents=()):
+    """Written whole and swapped in, so a reader never sees half a file. `agents`: the agents it has seen, so one
+    added later is told apart from one taken off a target on purpose."""
+    body = {"targets": [{"id": t["id"], **{k: (address(t) if k == "address" else t[k]) for k in EDITABLE}} for t in targets],
+            "agents": sorted(set(agents))}
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(body, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(tmp, path)
@@ -421,6 +437,18 @@ def smokeping_agents(secs, base, files):
     return agents
 
 
+def add_new_agents(targets, agents, known):
+    """An agent the targets do not know yet probes all of them: it is added to every target that lists its agents
+    (a target with no list is probed by every agent already). `known`: the agents seen before, or None for the
+    ones some target names. -> the new agents, if a target had to take them"""
+    if known is None:
+        known = {n for t in targets for n in t["slaves"] or ()}
+    new, listed = [n for n in agents if n not in known], [t for t in targets if t["slaves"] is not None]
+    for t in listed if new else ():
+        t["slaves"] = t["slaves"] + [n for n in new if n not in t["slaves"]]
+    return new if listed else []
+
+
 def load_config(a):
     """-> {targets, agents, step, pings, files}, from SmokePing's config or targets.ini, plus AGENTS."""
     files, step, pings, agents = [], DEFAULT_STEP, DEFAULT_PINGS, {}
@@ -444,14 +472,22 @@ def load_config(a):
             log(f"wrote an example targets file to {a.targets}: put your targets in it")
         targets = load_targets(a.targets)
         files.append(a.targets)
-    source = "smokeping" if a.smokeping else "ini"
+    source, known = "smokeping" if a.smokeping else "ini", None
     if edited.exists():
-        targets, source = load_json_targets(edited), "page"
+        (targets, known), source = load_json_targets(edited), "page"
         files.append(edited)
     agents.update(parse_agents(a.agents, a.name))      # AGENTS adds to (or overrides) SmokePing's slaves
     agents.pop(a.name, None)
-    return {"targets": targets, "agents": agents, "step": step, "pings": pings, "files": files, "source": source,
-            "edited": edited}
+    new = add_new_agents(targets, agents, set(known) if known is not None else None)
+    if new:
+        log(f"new agent{'s' if len(new) > 1 else ''} {', '.join(new)}: probing all {len(targets)} targets")
+    if source == "page" and (new or known is None):    # remember them, so unticking one later sticks
+        try:
+            save_json_targets(edited, targets, {*(known or ()), *agents})
+        except OSError as e:
+            log(f"cannot write {edited}: {e}")
+    return {"targets": targets, "agents": agents, "step": STEP_ENV or step, "pings": pings, "files": files,
+            "source": source, "edited": edited}
 
 
 def stamp(files):
@@ -609,13 +645,19 @@ def trace_capacity():
     return max(1, int(TRACE_PARALLEL * (STEP * 2 / 3) // (MTR_CYCLES + 5)))
 
 
+def trace_rounds():
+    """Rounds between two traceroutes of a target that TRACE_STEP asks for (1: every round)."""
+    return max(1, round(TRACE_STEP / STEP)) if TRACE_STEP else 1
+
+
 def trace_plan(targets, ts, lossy=()):
-    """The targets traced this round: all of them when they fit, else each in turn every k rounds, plus (in
-    the room left) those that lost packets in the last round, where a traceroute says the most."""
+    """The targets traced this round: all of them when they fit and TRACE_STEP asks for no fewer, else each in
+    turn every k rounds, plus (in the room left) those that started losing packets in the last round, where a
+    traceroute says the most."""
     room = trace_capacity()
-    if len(targets) <= room:
+    k = max(trace_rounds(), math.ceil(len(targets) / max(1, room * 3 // 4)) if len(targets) > room else 1)
+    if k == 1:
         return targets
-    k = math.ceil(len(targets) / max(1, room * 3 // 4))
     ordered = sorted(targets, key=lambda t: t["id"])
     plan = ordered[ts // STEP % k::k]
     ids = {t["id"] for t in plan}
@@ -625,6 +667,17 @@ def trace_plan(targets, ts, lossy=()):
 def lost(pings):
     """Targets that lost at least one ping this round."""
     return {tid for tid, rtts in (pings or {}).items() if None in rtts}
+
+
+class Lossy:
+    """The targets that started losing pings last round: traced the next one out of turn. One that loses pings
+    every round (a router that rate-limits ICMP) is traced when it starts, then in its turn like the rest."""
+    def __init__(self):
+        self.before, self.fresh = set(), set()
+
+    def update(self, pings):
+        now = lost(pings)
+        self.fresh, self.before = now - self.before, now
 
 
 def probe_round(targets, ts, ping_fn, trace_fn, lossy=()):
@@ -1013,19 +1066,30 @@ def every_round(fn):
 
 
 def collector(path, source, targets_fn, ping_fn, trace_fn, before=lambda: None, after=lambda ts: None):
-    lossy = set()
+    lossy = Lossy()
 
     def one(ts):
         before()
-        pings, traces = probe_round(targets_fn(), ts, ping_fn, trace_fn, lossy)
-        lossy.clear()
-        lossy.update(lost(pings))
+        pings, traces = probe_round(targets_fn(), ts, ping_fn, trace_fn, lossy.fresh)
+        lossy.update(pings)
         store(path, *round_rows(source, ts, pings, traces), ts)
         after(ts)
     every_round(one)
 
 
 # ---------- remote agents ----------
+
+def steps():
+    """What the server tells its agents about timing: they probe on its clock."""
+    return {"step": STEP, "pings": PINGS, "trace_step": TRACE_STEP}
+
+
+def take_steps(got):
+    """An agent takes the server's step, pings and TRACE_STEP (a server older than TRACE_STEP sends none)."""
+    global STEP, PINGS, TRACE_STEP
+    STEP, PINGS = _int(got["step"], 60, 3600), _int(got["pings"], 1, 100)
+    TRACE_STEP = _int(got["trace_step"], 60, 86400) if got.get("trace_step") else None
+
 
 def run_agent(server, token, ping_fn, trace_fn):
     """Push mode: probe from here, push each round to the server; keep rounds while it is unreachable."""
@@ -1037,20 +1101,19 @@ def run_agent(server, token, ping_fn, trace_fn):
             return json.load(r)
 
     backlog = deque(maxlen=AGENT_BACKLOG)   # ponytail: in memory, lost on restart; a file if that ever matters
-    targets, lossy = [], set()
+    targets, lossy = [], Lossy()
 
     def one(ts):
-        nonlocal targets, lossy
-        global STEP, PINGS
+        nonlocal targets
         try:
             got = call("/api/agent/targets")
             targets = agent_targets(got["targets"])
-            STEP, PINGS = _int(got["step"], 60, 3600), _int(got["pings"], 1, 100)   # the primary decides
+            take_steps(got)                 # the primary decides
         except Exception as e:
             log(f"cannot fetch targets from {server}: {e}" + (" (using the last list)" if targets else ""))
         if targets:
-            pings, traces = probe_round(targets, ts, ping_fn, trace_fn, lossy)
-            lossy = lost(pings)
+            pings, traces = probe_round(targets, ts, ping_fn, trace_fn, lossy.fresh)
+            lossy.update(pings)
             backlog.append({"ts": ts, "pings": pings, "traces": traces})
         while backlog:
             try:
@@ -1067,7 +1130,7 @@ def run_agent(server, token, ping_fn, trace_fn):
 def run_listener(listen, token, ping_fn, trace_fn):
     """Pull mode: the server comes to us each round with our targets and takes the rounds we have."""
     host, _, port = listen.rpartition(":")
-    state = {"targets": [], "backlog": deque(maxlen=AGENT_BACKLOG), "lossy": set()}
+    state = {"targets": [], "backlog": deque(maxlen=AGENT_BACKLOG), "lossy": Lossy()}
     lock = threading.Lock()
 
     class Pull(BaseHTTPRequestHandler):
@@ -1075,7 +1138,6 @@ def run_listener(listen, token, ping_fn, trace_fn):
             self.reply(200, b"ok") if self.path == "/livez" else self.reply(404, b"not found")
 
         def do_POST(self):
-            global STEP, PINGS
             given = self.headers.get("Authorization", "").removeprefix("Bearer ").encode()
             if self.path != "/api/agent/pull" or not hmac.compare_digest(given, token.encode()):
                 return self.reply(401, b'{"error":"bad token"}')
@@ -1084,7 +1146,7 @@ def run_listener(listen, token, ping_fn, trace_fn):
                 body = json.loads(self.rfile.read(min(size, MAX_PUSH)))
                 with lock:
                     state["targets"] = agent_targets(body["targets"])
-                    STEP, PINGS = _int(body["step"], 60, 3600), _int(body["pings"], 1, 100)
+                    take_steps(body)
                     ack = _int(body.get("ack") or 0, 0, 2 ** 40)
                     while state["backlog"] and state["backlog"][0]["ts"] <= ack:
                         state["backlog"].popleft()      # the server has these: drop them only now
@@ -1107,8 +1169,8 @@ def run_listener(listen, token, ping_fn, trace_fn):
         with lock:
             targets = list(state["targets"])
         if targets:
-            pings, traces = probe_round(targets, ts, ping_fn, trace_fn, state["lossy"])
-            state["lossy"] = lost(pings)
+            pings, traces = probe_round(targets, ts, ping_fn, trace_fn, state["lossy"].fresh)
+            state["lossy"].update(pings)
             with lock:
                 state["backlog"].append({"ts": ts, "pings": pings, "traces": traces})
 
@@ -1125,7 +1187,7 @@ def pull_agent(path, name, agent):
     ack = PULL_ACK.get(name, 0)
     for _ in range(AGENT_BACKLOG // PULL_BATCH + 1):
         mine = targets_for(name)
-        body = {"step": STEP, "pings": PINGS, "ack": ack, "targets": [agent_view(t) for t in mine]}
+        body = {**steps(), "ack": ack, "targets": [agent_view(t) for t in mine]}
         req = urllib.request.Request(agent["url"].rstrip("/") + "/api/agent/pull", data=json.dumps(body).encode(),
                                      headers={"Authorization": f"Bearer {agent['token']}",
                                               "Content-Type": "application/json", "User-Agent": "smoketrace"})
@@ -1210,6 +1272,13 @@ def overview(db, sources, src, targets, now):
         rows.append(row)
     return {"now": now, "step": STEP, "source": src, "targets": rows, "auth": bool(PASSWORD),
             "sources": [{"name": s, "last_ts": last.get(s)} for s in sources]}
+
+
+def editable_why():
+    """Why the page cannot edit the targets, or None when it can."""
+    if CONFIG["source"] == "demo":
+        return "demo"
+    return None if PASSWORD else "password"     # anyone who can open the page could change what the server probes
 
 
 def target_detail(db, src, t, rng, now):
@@ -1402,7 +1471,8 @@ def board(db, sources, src, targets, rng, now):
                 agent_ev += [{"ts": a + STEP, "kind": "quiet", "source": name}, {"ts": b, "kind": "back", "source": name}]
     last = last_rounds(db)
     events = sorted(events + agent_ev, key=lambda e: -e["ts"])[:500]
-    return {"now": now, "step": STEP, "source": src, "range": rng, "start": start, "width": width, "cells": nb,
+    return {"now": now, "step": STEP, "trace_step": trace_rounds() * STEP, "editable": editable_why() is None,
+            "source": src, "range": rng, "start": start, "width": width, "cells": nb,
             "auth": bool(PASSWORD), "version": VERSION, "sources": [{"name": x, "last_ts": last.get(x)} for x in sources], "targets": out,
             "fleet": [round(statistics.median(f), 1) if f else None for f in fleet],
             "problems": problems, "clusters": clusters, "local": local, "events": events,
@@ -1707,7 +1777,7 @@ class Handler(BaseHTTPRequestHandler):
                 name = self.agent()
                 if not name:
                     return self.send(401, b'{"error":"bad token"}', "application/json")
-                return self.json({"step": STEP, "pings": PINGS, "targets": [agent_view(t) for t in targets_for(name)]})
+                return self.json({**steps(), "targets": [agent_view(t) for t in targets_for(name)]})
             if not signed_in(self.headers.get("Cookie")):
                 if u.path.startswith("/api/"):
                     return self.send(401, b'{"error":"sign in"}', "application/json")
@@ -1785,11 +1855,7 @@ class Handler(BaseHTTPRequestHandler):
         self.json({"ok": True})
 
     def target_list(self):
-        why = None
-        if CONFIG["source"] == "demo":
-            why = "demo"
-        elif not PASSWORD:
-            why = "password"         # anyone who can open the page could change what the server probes
+        why = editable_why()
         return {"source": CONFIG["source"], "file": str(CONFIG["edited"] or ""), "editable": why is None, "why": why,
                 "sources": self.sources, "targets": [{"id": t["id"], **{k: (address(t) if k == "address" else t[k])
                                                                       for k in EDITABLE}, "probe": t["probe"]}
@@ -1805,7 +1871,7 @@ class Handler(BaseHTTPRequestHandler):
             d = json.loads(body)
             with EDIT_LOCK:
                 new = edit_targets(self.targets, d.get("op"), d)
-                save_json_targets(CONFIG["edited"], new)
+                save_json_targets(CONFIG["edited"], new, self.agents)
                 apply_config(CONFIG["args"], load_config(CONFIG["args"]))
         except (ValueError, AttributeError, TypeError) as e:
             field, _, msg = str(e).partition(": ")
@@ -2104,7 +2170,7 @@ def after_round(db, a):
 
 
 def main():
-    global PASSWORD, METRICS_TOKEN, PUBLIC_URL, ASN_LOOKUP, LOSS_WARN, LOSS_CRIT, ALERTS, TRACE_PARALLEL
+    global PASSWORD, METRICS_TOKEN, PUBLIC_URL, ASN_LOOKUP, LOSS_WARN, LOSS_CRIT, ALERTS, TRACE_PARALLEL, STEP_ENV, TRACE_STEP, STEP
     env = os.environ.get
     ap = argparse.ArgumentParser(description="SmokePing-style latency + mtr traceroutes")
     ap.add_argument("--targets", type=Path, default=Path(env("TARGETS", HERE / "targets.ini")))
@@ -2128,6 +2194,14 @@ def main():
     ASN_LOOKUP = env("ASN", "1") != "0"
     LOSS_WARN, LOSS_CRIT = float(env("LOSS_WARN", LOSS_WARN)), float(env("LOSS_CRIT", LOSS_CRIT))
     TRACE_PARALLEL = _int(int(env("TRACE_PARALLEL", TRACE_PARALLEL)), 1, 64)
+    if env("STEP"):
+        STEP_ENV = duration(env("STEP"), "STEP")
+        if not 60 <= STEP_ENV <= 3600:
+            raise SystemExit(f"STEP={env('STEP')}: from 60 s to 1 h")
+    if env("TRACE_STEP"):
+        TRACE_STEP = duration(env("TRACE_STEP"), "TRACE_STEP")
+        if not 60 <= TRACE_STEP <= 86400:
+            raise SystemExit(f"TRACE_STEP={env('TRACE_STEP')}: from 60 s to 24 h")
     ALERTS = Alerter(env("DISCORD_WEBHOOK"), env("NTFY_URL"), env("WEBHOOK_URL"), routes=env("ALERT_ROUTES", "1") != "0")
     if a.import_rrd:
         return import_rrd(a)
@@ -2152,6 +2226,7 @@ def main():
     if not NAME_RE.fullmatch(a.name):
         raise SystemExit(f"--name {a.name!r}: lowercase letters, digits and -")
     if a.demo:
+        STEP = STEP_ENV or STEP
         targets = [make_target(slug(f"{g}-{n}"), g, n, **parse_host(h)) for g, n, h, _ in DEMO_TARGETS]
         db = a.db or HERE / "demo.db"
         for suffix in ("", "-wal", "-shm"):
@@ -2182,7 +2257,8 @@ def main():
         Handler.db = db
 
     extras = [x for x, on in (("sign-in", PASSWORD), ("alerts", ALERTS.enabled()), ("metrics token", METRICS_TOKEN)) if on]
-    log(f"smoketrace {VERSION}: {len(Handler.targets)} targets, sources {', '.join(Handler.sources)}"
+    timing = f"pings every {STEP} s" + (f", traces every {trace_rounds() * STEP} s" if trace_rounds() > 1 else "")
+    log(f"smoketrace {VERSION}: {len(Handler.targets)} targets, sources {', '.join(Handler.sources)}, {timing}"
         f"{', ' + ', '.join(extras) if extras else ''}, http://{a.bind}:{a.port}")
     ThreadingHTTPServer((a.bind, a.port), Handler).serve_forever()
 

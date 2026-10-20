@@ -249,6 +249,32 @@ with sync_playwright() as p:
     pg.goto(EDIT_URL + "/#/")
     pg.wait_for_function("S.b && S.b.targets.length === 3")
     check("the overview has the edited list", sorted(x["name"] for x in pg.evaluate("S.b.targets")) == ["Cloudflare 1.0.0.1", "Quad9", "Router"])
+
+    # edit where you are: a target's own page, add from a group's page, Esc closes without leaving
+    pg.goto(EDIT_URL + "/#/t/internet-quad9")
+    pg.wait_for_selector("#dhead [data-tedit]")
+    pg.click("#dhead [data-tedit]")
+    pg.wait_for_function("document.querySelector('#tdlg').open && document.querySelector('#tform')")
+    pg.fill("#tform [name=name]", "Quad9 DNS")
+    pg.click("#tform button[type=submit]")
+    pg.wait_for_function("!document.querySelector('#tdlg').open && S.det && S.det.target.name === 'Quad9 DNS'")
+    check("edited on its own page, which stays open", pg.evaluate("location.hash") == "#/t/internet-quad9")
+    pg.goto(EDIT_URL + "/#/?g=Internet")
+    pg.wait_for_selector(".head-meta [data-act=tadd]")
+    pg.click(".head-meta [data-act=tadd]")
+    pg.wait_for_function("document.querySelector('#tdlg').open && document.querySelector('#tform')")
+    check("Add target on a group fills the group in", pg.input_value("#tform [name=group]") == "Internet")
+    pg.keyboard.press("Escape")
+    pg.wait_for_function("!document.querySelector('#tdlg').open && TG.edit === null")    # "close" comes a moment later
+    check("Esc closes the form and stays on the group", pg.evaluate("location.hash") == "#/?g=Internet")
+
+    # the sidebar from the targets page opens the group (it used to change only the address)
+    pg.goto(EDIT_URL + "/#/targets")
+    pg.wait_for_function("TG.data && document.querySelector('#tlist table')")
+    pg.click("#tree [data-g='Internet']")
+    pg.wait_for_function("document.querySelector('#view').dataset.view === 'dash'", timeout=3000)
+    check("a group picked on the targets page opens", pg.evaluate("location.hash") == "#/?g=Internet"
+          and pg.text_content("#view h1") == "Internet")
     check("no page errors", not errors, errors)
     b.close()
 srv.shutdown()

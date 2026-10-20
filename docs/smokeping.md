@@ -31,7 +31,7 @@ The secrets file is often readable by SmokePing's user only. The container runs 
 | `@include` | followed, relative to the including file |
 | `FPing`, `FPing6`, `TCPPing` (`port`), `DNS` (`lookup`) and their subprobes | probed as ICMP, TCP and DNS; other probes (Curl, SSH…) and multi-host graphs are listed in the log and left out |
 | `*** Slaves ***` and its `secrets` file | the agents: a slave's name, with its secret as the agent's `TOKEN`; `url = http://…` under a slave makes the server fetch from it |
-| `slaves = porto office` | which agents probe the target (inherited, as in SmokePing) |
+| `slaves = porto office` | which agents probe the target (inherited, as in SmokePing); an agent no target names, such as one added in `AGENTS` later, probes them all |
 | `nomasterpoll = yes` | the server leaves the target to its agents |
 | `step`, `pings` in `*** Database ***` | the round length and the pings per round, for the server and every agent |
 | `loss_warn`, `loss_crit` (in %), `latency_warn` (in ms) | smoketrace's own per-target limits, inherited down the tree |

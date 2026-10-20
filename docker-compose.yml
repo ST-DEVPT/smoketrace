@@ -54,6 +54,8 @@ services:
       # METRICS_TOKEN: another-long-random-token   # /metrics then needs it as a bearer token
 
       # --- tuning -----------------------------------------------------------------------------------------------
+      # STEP: 3m                  # pings every 3 minutes (default 5, or SmokePing's step); agents follow
+      # TRACE_STEP: 15m           # a traceroute of each target every 15 minutes (default: every round)
       # TRACE_PARALLEL: "16"      # traceroutes at once (1-64): fewer use less CPU, more trace each target more often
       # ASN: "0"                  # no AS numbers and operator names on hops
     logging:
