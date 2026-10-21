@@ -238,7 +238,7 @@ Everything is an environment variable in `docker-compose.yml` (or a flag without
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `NAME` | `local` | What the page calls this server's own probe. Lowercase letters, digits and `-`. |
+| `NAME` | `local` | What the page calls this server's own probe. Letters, digits, `_` and `-`. |
 | `PASSWORD` | none | Sign-in for the page and its API. Needed to edit targets on the page. |
 | `PUBLIC_URL` | none | The page's address, e.g. `https://smoketrace.example.com`, for links in alerts. |
 | `PORT` | `8099` | The port the page listens on. |

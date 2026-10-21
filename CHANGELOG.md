@@ -2,6 +2,25 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.12.0] - 2026-10-21
+
+- **Fixed: the heatmap's buttons stopped working.** A click on empty space in the page (between the controls, on the
+  heatmap's header) was read as a click on a view button, because the page itself carried a `data-view` marker.
+  The view became "dash", was saved, and from then on no view button was pressed and the heatmap's colour buttons
+  did nothing; it survived reloads. The marker is renamed, a saved view must be heatmap, table or cards, and
+  `test_ui.py` clicks empty space to keep it so. 1200 random clicks across the overview found nothing else.
+- **The overview no longer waits on a new round.** Each round made the next visitor wait while the board was
+  rebuilt: up to 15 s for a week of every site on 555 targets. The last board is now served at once while the new
+  one is made behind it, and the boards people look at are rebuilt right after each round.
+- A target's page asks for its data and the other sites' together instead of one after the other.
+- **Working targets are green again**: the status dot of an OK target, in the list, the heatmap rows and the cards.
+- **Names as you write them**: host names may have capitals and `_` (`My_Host.lan`), and so may site names in
+  `NAME` and `AGENTS` (`FS_OPO`). A host that starts with `-` is still refused.
+- **Where each site is**: *Seen from* shows each site's country, and its provider in the tooltip, taken from its
+  own traceroutes (the network of its first hop with an AS number). The same line heads each site's traceroute.
+  Nothing is sent to an outside service.
+- The probe timeout kill also works where there are no process groups (Windows, for development).
+
 ## [0.11.0] - 2026-10-21
 
 - **Agents and servers no longer run out of processes.** In the image, Python was PID 1: each mtr killed for

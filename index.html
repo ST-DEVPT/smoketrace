@@ -118,7 +118,7 @@ a.node { text-decoration: none; }
 
 /* ---------- status: shape + label, never colour alone ---------- */
 .ic { width: 12px; height: 12px; flex: none; fill: currentColor; }
-.ic-ok { color: var(--ink-3); } .ic-warn { color: var(--warn); } .ic-crit { color: var(--crit); } .ic-down { color: var(--down); } .ic-stale { color: var(--stale); }
+.ic-ok { color: var(--ok); } .ic-warn { color: var(--warn); } .ic-crit { color: var(--crit); } .ic-down { color: var(--down); } .ic-stale { color: var(--stale); }
 .swap { color: var(--ink-3); }
 .st, .pill { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; white-space: nowrap; color: var(--ink); }
 .st.quiet { font-weight: 400; color: var(--ink-3); }
@@ -154,6 +154,7 @@ button.kpi[aria-pressed="true"] .cap { color: var(--ink); font-weight: 600; }
 .seg { display: inline-flex; flex: none; border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; }
 .seg button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; padding: 4px 11px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
 .seg button + button { border-left: 1px solid var(--line-2); }
+.seg .cc { margin-left: 5px; font: 10.5px "Plex Mono", monospace; opacity: .7; }
 .seg button:hover { color: var(--ink); }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
 .fbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
@@ -768,7 +769,8 @@ function srcSeg() {
   const srcs = S.b?.sources || [];
   return srcs.length < 2 ? "" : `<span class="seg" role="group" aria-label="${t("seenFrom")}"><button data-src="${ALL}" aria-pressed="${S.src === ALL}" title="${t("seenFrom")} ${t("allSitesT")}">${t("allSites")}</button>${srcs.map(s => {
     const late = !s.last_ts || S.b.now - s.last_ts > 3 * S.b.step;
-    return `<button data-src="${esc(s.name)}" aria-pressed="${s.name === S.src}" title="${t("seenFrom")} ${esc(s.name)}">${late ? icon("stale") : ""}${esc(s.name)}</button>`;
+    const where = [s.as_name, s.asn, s.cc].filter(Boolean).join(" · ");     // its provider, from its own traceroutes
+    return `<button data-src="${esc(s.name)}" aria-pressed="${s.name === S.src}" title="${t("seenFrom")} ${esc(s.name)}${where ? ": " + esc(where) : ""}">${late ? icon("stale") : ""}${esc(s.name)}${s.cc ? `<span class="cc">${esc(s.cc)}</span>` : ""}</button>`;
   }).join("")}</span>`;
 }
 function favicon() {
@@ -839,7 +841,7 @@ async function postJSON(path, body) {
 function renderTargets() {
   const v = $("#view");
   if (!S.tpage) return;
-  v.dataset.view = "targets";
+  v.dataset.page = "targets";
   const d = TG.data;
   const head = lede => `<div class="page-head"><div><h1 tabindex="-1">${t("targetsNav")}</h1><p class="lede">${lede}</p></div>
     <div class="head-meta">${d?.editable && !TG.edit ? `<button class="btn primary" data-act="tadd">${t("tAdd")}</button>` : ""}</div></div>`;
@@ -980,14 +982,14 @@ function renderDash() {
   if (S.id || S.tpage) return;
   const head = (title, lede) => `<div class="page-head"><div><h1>${title}</h1>${lede ? `<p class="lede">${lede}</p>` : ""}</div></div>`;
   if (!S.b) {          // the final layout, each value a flat bar at its size; nothing moves when the data lands
-    v.dataset.view = "loading";
+    v.dataset.page = "loading";
     v.innerHTML = `<div class="page-head"><div><h1>${t("overview")}</h1><p class="lede"><span class="sk w3"></span></p></div></div>
       <section class="kpis">${'<div class="kpi"><div class="cap"><span class="sk"></span></div><div class="v"><span class="sk" style="height:28px;width:3ch"></span></div><div class="s"><span class="sk w2"></span></div></div>'.repeat(6)}</section>`;
     return;
   }
-  if (!S.b.targets.length) { v.dataset.view = "empty"; v.innerHTML = head(t("overview")) + empty(t("noTargetsT"), `${t("noTargetsB")} <a href="#/targets">${t("tOpen")}</a>`); return; }
+  if (!S.b.targets.length) { v.dataset.page = "empty"; v.innerHTML = head(t("overview")) + empty(t("noTargetsT"), `${t("noTargetsB")} <a href="#/targets">${t("tOpen")}</a>`); return; }
   const keepTop = $("#hmScroll")?.scrollTop || 0, keepTw = $("#tw")?.scrollTop || 0;   // a refresh keeps the place
-  v.dataset.view = "dash";
+  v.dataset.page = "dash";
   const b = S.b, sc = scoped(), list = shownList();
   S.hm = null;
   const parts = S.f.g ? S.f.g.split(" / ") : [];
@@ -1183,7 +1185,7 @@ function clip(g, s, w) {
 }
 function drawShape(g, st, x, y, C) {
   g.save(); g.translate(x - 6, y - 6);
-  g.fillStyle = g.strokeStyle = st === "ok" ? C.ink3 : C[st];
+  g.fillStyle = g.strokeStyle = st === "ok" ? C.okS : C[st];
   g.beginPath();
   if (st === "ok") { g.arc(6, 6, 4.4, 0, 7); g.fill(); }
   else if (st === "warn") { g.moveTo(6, 1.3); g.lineTo(11.2, 10.6); g.lineTo(.8, 10.6); g.fill(); }
@@ -1403,8 +1405,8 @@ function timelineHtml(sc) {
 async function loadDetail() {
   const id = S.id, tok = ++REQ.det, range = S.drange;
   try {
-    const d = await api(`/api/target?id=${encodeURIComponent(id)}&range=${range}${qsrc(id)}`);
-    const cmp = cmpOn() && (S.b?.sources.length || 0) > 1 ? await api(`/api/compare?id=${encodeURIComponent(id)}&range=${range}`) : null;
+    const [d, cmp] = await Promise.all([api(`/api/target?id=${encodeURIComponent(id)}&range=${range}${qsrc(id)}`),   // together, not one after the other
+      cmpOn() && (S.b?.sources.length || 0) > 1 ? api(`/api/compare?id=${encodeURIComponent(id)}&range=${range}`) : null]);
     if (tok !== REQ.det || S.id !== id) return;
     if (S.det?.points.length !== d.points.length) S.hover = null;
     S.det = d; S.cmp = cmp; S.detErr = null;
@@ -1440,9 +1442,9 @@ function pickMoment(ts) {
 function renderDetail() {
   const v = $("#view");
   if (!S.id) return;
-  if (S.detErr === "notfound") { v.dataset.view = "nf"; v.innerHTML = empty(t("notFoundT"), t("notFoundB")); return; }
-  if (v.dataset.view !== "t:" + S.id) {
-    v.dataset.view = "t:" + S.id;
+  if (S.detErr === "notfound") { v.dataset.page = "nf"; v.innerHTML = empty(t("notFoundT"), t("notFoundB")); return; }
+  if (v.dataset.page !== "t:" + S.id) {
+    v.dataset.page = "t:" + S.id;
     v.innerHTML = `
       <div class="page-head" id="dhead"></div>
       <section class="kpis" id="dkpis"></section>
@@ -1673,7 +1675,8 @@ function renderTrace() {
     <span class="seg" role="group" aria-label="${t("compareAria")}"><button data-vs="route" aria-pressed="${S.vs === "route"}">${t("vsRoute")}</button><button data-vs="round" aria-pressed="${S.vs === "round"}">${t("vsRound")}</button></span></div>`;
   if (!tr) { el.innerHTML = head + `<div class="empty">${t("loading")}</div>`; return; }
   if (tr.error) { el.innerHTML = head + empty(t("traceErr"), `<button class="btn" data-act="retrace">${t("tryAgain")}</button>`); return; }
-  const site = name => more.length ? `<h3 class="tsite">${t("seenFrom")} <b>${esc(name)}</b></h3>` : "";
+  const net = name => { const x = (S.b?.sources || []).find(y => y.name === name); return x?.as_name ? ` <span class="dim">· ${esc(x.as_name)}${x.cc ? ", " + esc(x.cc) : ""}</span>` : ""; };
+  const site = name => more.length ? `<h3 class="tsite">${t("seenFrom")} <b>${esc(name)}</b>${net(name)}</h3>` : "";
   el.innerHTML = head + site(S.det?.source || "") + traceBlock(tr, true)
     + more.map(x => site(x.name) + traceBlock(x.tr, false)).join("") + `<p class="foot">${t("foot")}</p>`;
 }
@@ -1780,6 +1783,8 @@ function renderRaw() {
 }
 
 // ---------- events ----------
+// the button shows the choice at once; the data follows when it arrives
+const pressOnly = (k, v) => document.querySelectorAll(`[data-${k}]`).forEach(b => b.setAttribute("aria-pressed", String(b.dataset[k]) === String(v)));
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-tedit],[data-tog],[data-act],[data-src],[data-brange],[data-drange],[data-view],[data-mode],[data-tl],[data-vs],[data-fst],[data-fp],[data-frc],[data-st],[data-rc],[data-g],[data-sortk],[data-ids],[data-here],[data-open]");
   if (!b) { if (document.body.classList.contains("drawer") && !e.target.closest(".side")) document.body.classList.remove("drawer"); return; }
@@ -1804,9 +1809,9 @@ document.addEventListener("click", e => {
   if (ds.act === "overview") { e.preventDefault(); toOverview(); return; }
   if (ds.act === "retrace") { loadTrace(); return; }
   if (ds.src) { S.src = ds.src; store.set("src", S.src); S.trace = null; S.traceFor = undefined; S.cmp = null; refresh(); return; }
-  if (ds.brange) { S.range = +ds.brange; store.set("brange", S.range); loadBoard(); return; }
-  if (ds.drange) { S.drange = +ds.drange; store.set("range", S.drange); S.hover = null; $("#tip").hidden = true; loadDetail(); return; }
-  if (ds.view) { S.view = ds.view; store.set("view", S.view); renderDash(); return; }
+  if (ds.brange) { S.range = +ds.brange; store.set("brange", S.range); pressOnly("brange", S.range); loadBoard(); return; }
+  if (ds.drange) { S.drange = +ds.drange; store.set("range", S.drange); S.hover = null; $("#tip").hidden = true; pressOnly("drange", S.drange); loadDetail(); return; }
+  if (ds.view && ["heat", "table", "cards"].includes(ds.view)) { S.view = ds.view; store.set("view", S.view); renderDash(); return; }
   if (ds.mode) { S.mode = ds.mode; store.set("hmode", S.mode); renderDash(); return; }
   if (ds.tl) { S.tl = ds.tl; renderDash(); return; }
   if (ds.vs) { S.vs = ds.vs; loadTrace(); return; }

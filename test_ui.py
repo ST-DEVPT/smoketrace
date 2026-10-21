@@ -123,7 +123,7 @@ with sync_playwright() as p:
     pg.wait_for_timeout(100)
     pg.evaluate("location.hash = '#/?g=Sites'")
     pg.wait_for_timeout(1600)
-    r = pg.evaluate("[S.id, S.det, document.querySelector('#view').dataset.view, S.f.g, !!document.querySelector('#hm')]")
+    r = pg.evaluate("[S.id, S.det, document.querySelector('#view').dataset.page, S.f.g, !!document.querySelector('#hm')]")
     check("late answers for a page already left are dropped", r == [None, None, "dash", "Sites", True], r)
     pg.evaluate("window.__slow = []")
 
@@ -155,6 +155,22 @@ with sync_playwright() as p:
     pg.wait_for_function("S.b && document.querySelector('#hm')")
     r = pg.evaluate("[S.view, HROWS.filter(r => r.x).every(r => shownList().some(x => x.id === r.x.id))]")
     check("an old saved view falls back to the heatmap", r == ["heat", True], r)
+
+    # 12. a click on empty space keeps the view (0.11: the page's own data-view was read as a view button)
+    pg.goto(URL + "/#/")
+    pg.wait_for_function("S.b && document.querySelector('#hm')")
+    box = pg.locator("#hm").bounding_box()
+    pg.mouse.click(box["x"] + 5, box["y"] + 8)                 # the heatmap's header row: no row, no cell
+    head = pg.locator(".page-head").bounding_box()
+    pg.mouse.click(head["x"] + head["width"] / 2, head["y"] + head["height"] - 6)
+    pg.wait_for_timeout(200)
+    r = pg.evaluate("[S.view, [...document.querySelectorAll('[data-view][aria-pressed=true]')].map(b => b.dataset.view), localStorage.getItem('view')]")
+    check("clicks on empty space keep the heatmap selected", r == ["heat", ["heat"], "heat"] or r[:2] == ["heat", ["heat"]], r)
+    pg.click("[data-mode=latency]")
+    pg.wait_for_timeout(100)
+    r = pg.evaluate("[S.mode, [...document.querySelectorAll('[data-mode][aria-pressed=true]')].map(b => b.dataset.mode)]")
+    check("the heatmap's colour buttons still answer", r == ["latency", ["latency"]], r)
+    pg.click("[data-mode=status]")
 
     # 12. every site at once by default; one site when picked; a target shows its worst site and all of them
     pg.evaluate("localStorage.removeItem('src')")
@@ -294,7 +310,7 @@ with sync_playwright() as p:
     pg.goto(EDIT_URL + "/#/targets")
     pg.wait_for_function("TG.data && document.querySelector('#tlist table')")
     pg.click("#tree [data-g='Internet']")
-    pg.wait_for_function("document.querySelector('#view').dataset.view === 'dash'", timeout=3000)
+    pg.wait_for_function("document.querySelector('#view').dataset.page === 'dash'", timeout=3000)
     check("a group picked on the targets page opens", pg.evaluate("location.hash") == "#/?g=Internet"
           and pg.text_content("#view h1") == "Internet")
     check("no page errors", not errors, errors)

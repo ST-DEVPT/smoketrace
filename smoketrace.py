@@ -36,7 +36,7 @@ import threading
 import time
 import unicodedata
 import urllib.request
-from collections import deque
+from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -45,7 +45,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.11.0"           # the top of CHANGELOG.md says the same; a test checks
+VERSION = "0.12.0"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
@@ -65,8 +65,8 @@ ALERT_ROUNDS = 2            # a new status or route must hold this many rounds b
 SESSION_DAYS = 30
 PROBES = ("icmp", "tcp", "dns")
 STATUS_CODE = {"ok": 0, "warn": 1, "crit": 2, "down": 3, "stale": 4}
-HOST_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.:-]*")   # no leading "-": a host must never parse as a probe option
-NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+HOST_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]*")   # no leading "-": a host must never parse as a probe option
+NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")   # site names: as written, case kept
 ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,199}")
 LOOKUP_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,252}")
 IP_RE = re.compile(r"[0-9A-Fa-f.:]{2,45}")
@@ -250,7 +250,7 @@ def parse_agents(spec, local):
         name, sep, rest = item.partition("=")
         token, _, url = rest.partition("@")
         if not sep or not NAME_RE.fullmatch(name) or name == local:
-            raise SystemExit(f"AGENTS: {name!r} must be a lowercase name (a-z, 0-9, -) other than {local!r}")
+            raise SystemExit(f"AGENTS: {name!r} must be a name of letters, digits, _ and - other than {local!r}")
         if len(token) < 16:
             raise SystemExit(f"AGENTS: the token for {name!r} must be at least 16 characters")
         if url and not url.startswith(("http://", "https://")):
@@ -428,7 +428,7 @@ def smokeping_agents(secs, base, files):
     agents = {}
     for n, attrs in slaves:
         if not NAME_RE.fullmatch(n):
-            log(f"slave {n!r} ignored: agent names are lowercase letters, digits and -")
+            log(f"slave {n!r} ignored: agent names are letters, digits, _ and -")
         elif not secrets.get(n, "").strip():
             log(f"slave {n!r} ignored: no secret for it in {path}")
         else:
@@ -520,7 +520,7 @@ def run(cmd, timeout):
             out, err = p.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(p.pid, signal.SIGKILL)
+                os.killpg(p.pid, signal.SIGKILL) if hasattr(os, "killpg") else p.kill()   # Windows: no groups
             except ProcessLookupError:
                 pass
             p.communicate()
@@ -1483,9 +1483,11 @@ def board(db, sources, src, targets, rng, now):
                 agent_ev += [{"ts": a + STEP, "kind": "quiet", "source": name}, {"ts": b, "kind": "back", "source": name}]
     last = last_rounds(db)
     events = sorted(events + agent_ev, key=lambda e: -e["ts"])[:500]
+    nets = site_networks(db, sources, targets)
     return {"now": now, "step": STEP, "trace_step": trace_rounds() * STEP, "editable": editable_why() is None,
             "source": src, "range": rng, "start": start, "width": width, "cells": nb,
-            "auth": bool(PASSWORD), "version": VERSION, "sources": [{"name": x, "last_ts": last.get(x)} for x in sources], "targets": out,
+            "auth": bool(PASSWORD), "version": VERSION, "targets": out,
+            "sources": [{"name": x, "last_ts": last.get(x), **nets.get(x, {})} for x in sources],
             "fleet": [round(statistics.median(f), 1) if f else None for f in fleet],
             "problems": problems, "clusters": clusters, "local": local, "events": events,
             "loss_warn": LOSS_WARN, "loss_crit": LOSS_CRIT}
@@ -1502,6 +1504,51 @@ def clusters_of(problems):
 
 
 ALL = "all"     # the board of every site at once
+REFRESHING = set()
+
+
+def refresh_board(src, rng):
+    """Recompute one board in the background, once at a time; the old one is served meanwhile."""
+    key = (src, rng)
+    if key in REFRESHING:
+        return
+    REFRESHING.add(key)
+
+    def run():
+        try:
+            with db_open(Handler.db) as db:
+                Handler.fresh_board(db, src, rng, int(time.time()))
+        except Exception as e:
+            log(f"board {src} {rng}: {e}")
+        finally:
+            REFRESHING.discard(key)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def warm_boards():
+    """After a round: bring every board someone has looked at up to date before they ask again."""
+    for src, rng in list(BOARD_CACHE):
+        refresh_board(src, rng)
+
+
+def site_networks(db, sources, targets):
+    """Where each site is, from its own traceroutes: the network of the first hop that has an AS number (its
+    provider), with the operator and the country from that AS's name. Nothing is asked of any outside service."""
+    out = {}
+    for s in sources:
+        seen = Counter()
+        for t in [t for t in targets if s in probers(t, sources)][:12]:
+            row = db.execute("SELECT hops FROM trace WHERE source=? AND target=? ORDER BY ts DESC LIMIT 1", (s, t["id"])).fetchone()
+            hop = next((h for h in json.loads(row[0]) if h.get("asn")), None) if row else None
+            if hop:
+                seen[hop["asn"]] += 1
+        if not seen:
+            continue
+        asn = seen.most_common(1)[0][0]
+        name = (db.execute("SELECT name FROM asn WHERE asn=?", (asn,)).fetchone() or [None])[0] or ""
+        m = re.fullmatch(r"(?:.* - )?(.*?)(?:, ([A-Z]{2}))?", name)
+        out[s] = {"asn": asn, "as_name": m.group(1) or None, "cc": m.group(2)}
+    return out
 
 
 def merge_boards(boards):
@@ -1906,16 +1953,28 @@ class Handler(BaseHTTPRequestHandler):
         ALERTS.check(self.db, name)
         self.json({"ok": True})
 
-    def board(self, db, src, rng, now):
-        """-> (board, its JSON), computed once per round however many viewers ask; "all" merges every site's."""
+    @classmethod
+    def fresh_board(cls, db, src, rng, now):
+        """-> (board, its JSON) as of now, computed once per round however many ask; "all" merges every site's."""
         key = (src, rng)
         with BOARD_LOCKS.setdefault(key, threading.Lock()):     # many viewers, one computation
             at, ver, data, body = BOARD_CACHE.get(key, (0, None, None, None))
-            if ver != (version := last_rounds(db)) or now - at >= STEP:     # a new round, or time moved
-                data = (merge_boards([self.board(db, s, rng, now)[0] for s in self.sources]) if src == ALL
-                        else board(db, self.sources, src, self.targets, rng, now))
+            version = last_rounds(db)
+            if data is None or ver != version or now - at >= STEP:     # none yet, a new round, or time moved
+                data = (merge_boards([cls.fresh_board(db, s, rng, now)[0] for s in cls.sources]) if src == ALL
+                        else board(db, cls.sources, src, cls.targets, rng, now))
                 body = json.dumps(data, separators=(",", ":")).encode()
                 BOARD_CACHE[key] = (now, version, data, body)
+        return data, body
+
+    def board(self, db, src, rng, now):
+        """What a viewer gets: the last board at once, and a newer one computed behind it when a round has landed.
+        Only the very first board of a range makes anyone wait (a week of every site took 15 s on 555 targets)."""
+        at, ver, data, body = BOARD_CACHE.get((src, rng), (0, None, None, None))
+        if data is None:
+            return self.fresh_board(db, src, rng, now)
+        if ver != last_rounds(db) or now - at >= STEP:
+            refresh_board(src, rng)
         return data, body
 
     def target_list(self):
@@ -2225,6 +2284,7 @@ def maybe_reload(a):
 def after_round(db, a):
     """The server's own round is stored: alerts, then the agents the server pulls from."""
     def run(ts):
+        warm_boards()
         ALERTS.check(db, a.name)
         ALERTS.sources(db, int(time.time()))
         for name, agent in Handler.agents.items():
@@ -2288,7 +2348,7 @@ def main():
         return run_agent(a.agent.rstrip("/"), a.token, real_ping, mtr)
 
     if not NAME_RE.fullmatch(a.name):
-        raise SystemExit(f"--name {a.name!r}: lowercase letters, digits and -")
+        raise SystemExit(f"--name {a.name!r}: letters, digits, _ and -")
     if a.demo:
         STEP = STEP_ENV or STEP
         targets = [make_target(slug(f"{g}-{n}"), g, n, **parse_host(h)) for g, n, h, _ in DEMO_TARGETS]
@@ -2304,7 +2364,7 @@ def main():
         for name, (ping_fn, trace_fn) in probes.items():
             seed_demo(db, name, core, ping_fn, trace_fn, t0)
             seed_demo(db, name, fleet, ping_fn, trace_fn, t0, days=2)     # a faster start; the week is for the core
-            after = lambda ts, name=name: ALERTS.check(db, name)
+            after = lambda ts, name=name: (warm_boards(), ALERTS.check(db, name))
             threading.Thread(target=collector, args=(db, name, lambda: targets, ping_fn, trace_fn),
                              kwargs={"after": after}, daemon=True).start()
     else:

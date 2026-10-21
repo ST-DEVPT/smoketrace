@@ -25,7 +25,7 @@ services:
       TZ: Europe/Lisbon           # the time zone for the logs
 
       # --- the basics ---------------------------------------------------------------------------------------
-      NAME: home                  # what the page calls this server's own probe (lowercase, digits, -)
+      NAME: home                  # what the page calls this server's own probe (letters, digits, _ and -)
       PASSWORD: change-me         # the sign-in for the page and its API; needed to edit targets on the page
       # PUBLIC_URL: https://smoketrace.example.com   # this page's address, so alerts link to it
       # PORT: 8099                # the port the page listens on

@@ -83,6 +83,8 @@ def test_trace_plan():
 
 def test_run_kills_the_whole_group():
     """A probe that times out takes its children with it (mtr's mtr-packet and AS lookup child)."""
+    if os.name != "posix":          # process groups and sh: Linux and macOS (CI runs it)
+        return
     with tempfile.TemporaryDirectory() as d:
         pid = Path(d, "pid")
         try:
@@ -461,7 +463,8 @@ def test_parse_agents():
         "porto": {"token": "0123456789abcdef", "url": None},
         "office": {"token": "fedcba9876543210", "url": "http://office:8100"}}
     assert st.parse_agents("", "local") == {}
-    for spec in ("porto=short", "Porto=0123456789abcdef", "local=0123456789abcdef", "porto",
+    assert list(st.parse_agents("FS_OPO=0123456789abcdef", "local")) == ["FS_OPO"]     # names as written
+    for spec in ("porto=short", "-porto=0123456789abcdef", "local=0123456789abcdef", "porto",
                  "porto=0123456789abcdef@ftp://x"):
         try:
             st.parse_agents(spec, "local")
@@ -719,6 +722,36 @@ def test_version_matches_the_changelog():
     top = next(line for line in (Path(st.__file__).parent / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
                if line.startswith("## ["))
     assert top.startswith(f"## [{st.VERSION}]"), (top, st.VERSION)
+
+
+def test_a_stale_board_is_served_while_a_new_one_is_made():
+    with tempfile.TemporaryDirectory() as d:
+        db, srv, url = server_with(d)
+        try:
+            st.BOARD_CACHE.clear()
+            st.BOARD_CACHE[("local", 86400)] = (0, None, {"old": True}, b'{"old":true}')    # long out of date
+            t0 = time.time()
+            assert call(url + "/api/board?range=86400&src=local") == {"old": True}     # no wait for the new one
+            assert time.time() - t0 < 1
+            for _ in range(100):                                             # made behind it
+                if not st.BOARD_CACHE[("local", 86400)][2].get("old"):
+                    break
+                time.sleep(.05)
+            assert "targets" in call(url + "/api/board?range=86400&src=local")
+        finally:
+            st.BOARD_CACHE.clear()
+            srv.shutdown()
+            srv.server_close()
+
+
+def test_names_with_capitals_and_underscores():
+    assert st.make_target("x", "g", "n", "My_Host.LAN")["host"] == "My_Host.LAN"
+    for bad in ("-f/etc/passwd", "-oops", "a b", "x;y"):
+        try:
+            st.make_target("x", "g", "n", bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
 
 
 def test_targets_edited_on_the_page():
