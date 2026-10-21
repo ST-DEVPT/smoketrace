@@ -11,7 +11,8 @@ Versions follow [semantic versioning](https://semver.org).
   `test_ui.py` clicks empty space to keep it so. 1200 random clicks across the overview found nothing else.
 - **The overview no longer waits on a new round.** Each round made the next visitor wait while the board was
   rebuilt: up to 15 s for a week of every site on 555 targets. The last board is now served at once while the new
-  one is made behind it, and the boards people look at are rebuilt right after each round.
+  one is made behind it, and the boards someone looked at in the last 10 minutes are rebuilt right after each
+  round (only those, so a view opened once does not cost CPU every round from then on).
 - A target's page asks for its data and the other sites' together instead of one after the other.
 - **Working targets are green again**: the status dot of an OK target, in the list, the heatmap rows and the cards.
 - **Names as you write them**: host names may have capitals and `_` (`My_Host.lan`), and so may site names in

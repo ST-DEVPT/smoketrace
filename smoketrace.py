@@ -1505,6 +1505,8 @@ def clusters_of(problems):
 
 ALL = "all"     # the board of every site at once
 REFRESHING = set()
+WATCHED = {}            # (source or "all", range) -> when a viewer last asked for it
+WATCH_FOR = 600         # boards asked for in the last 10 minutes are kept warm; the rest wait for a viewer
 
 
 def refresh_board(src, rng):
@@ -1525,10 +1527,16 @@ def refresh_board(src, rng):
     threading.Thread(target=run, daemon=True).start()
 
 
-def warm_boards():
-    """After a round: bring every board someone has looked at up to date before they ask again."""
-    for src, rng in list(BOARD_CACHE):
-        refresh_board(src, rng)
+def warm_boards(now=None):
+    """After a round: bring the boards someone is watching up to date before they ask again. Only those: a week of
+    every site costs seconds of CPU, and nobody should pay that every round for a view opened once yesterday."""
+    now = now or time.time()
+    for key, at in list(WATCHED.items()):
+        if now - at <= WATCH_FOR:
+            refresh_board(*key)
+        else:
+            WATCHED.pop(key, None)
+            BOARD_CACHE.pop(key, None)
 
 
 def site_networks(db, sources, targets):
@@ -1970,6 +1978,7 @@ class Handler(BaseHTTPRequestHandler):
     def board(self, db, src, rng, now):
         """What a viewer gets: the last board at once, and a newer one computed behind it when a round has landed.
         Only the very first board of a range makes anyone wait (a week of every site took 15 s on 555 targets)."""
+        WATCHED[(src, rng)] = time.time()
         at, ver, data, body = BOARD_CACHE.get((src, rng), (0, None, None, None))
         if data is None:
             return self.fresh_board(db, src, rng, now)

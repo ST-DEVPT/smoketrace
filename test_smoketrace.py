@@ -744,6 +744,22 @@ def test_a_stale_board_is_served_while_a_new_one_is_made():
             srv.server_close()
 
 
+def test_only_watched_boards_are_kept_warm():
+    started, saved = [], st.refresh_board
+    st.refresh_board = lambda src, rng: started.append((src, rng))
+    try:
+        st.WATCHED.clear()
+        st.WATCHED.update({("all", 604800): 1000.0, ("local", 86400): 1000.0 + st.WATCH_FOR + 50})
+        st.BOARD_CACHE[("all", 604800)] = (0, None, {}, b"{}")
+        st.warm_boards(now=1000.0 + st.WATCH_FOR + 60)
+        assert started == [("local", 86400)]                        # watched a minute ago: rebuilt
+        assert ("all", 604800) not in st.WATCHED and ("all", 604800) not in st.BOARD_CACHE   # idle: dropped
+    finally:
+        st.refresh_board = saved
+        st.WATCHED.clear()
+        st.BOARD_CACHE.clear()
+
+
 def test_names_with_capitals_and_underscores():
     assert st.make_target("x", "g", "n", "My_Host.LAN")["host"] == "My_Host.LAN"
     for bad in ("-f/etc/passwd", "-oops", "a b", "x;y"):
