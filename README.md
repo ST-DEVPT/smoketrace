@@ -300,6 +300,10 @@ that follows the site's name in the server's `AGENTS`. `AGENTS` itself belongs o
 restarted after `AGENTS` changed. `cannot fetch targets` with a connection error: `SERVER` is wrong or blocked;
 open that address in a browser from the site.
 
+**An agent logs "can't fork", "Unable to start net module" or "can't start new thread".** Update the image to
+0.11 or later. Before 0.11, each mtr killed for running too long left its helper processes behind until the
+container could not start any more; `init: true` in the compose service also cures it.
+
 **The Targets page is read-only.** Set `PASSWORD` and sign in. Without a sign-in, anyone who opens the page could
 change what your server probes.
 

@@ -5,6 +5,7 @@ import math
 import os
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -78,6 +79,30 @@ def test_trace_plan():
     k = math.ceil(555 / (room * 3 // 4))
     assert len({t["id"] for p in plans[:k] for t in p}) == 555                       # everyone within k rounds
     assert st.lost({"a": [1.0, None], "b": [1.0, 2.0]}) == {"a"}
+
+
+def test_run_kills_the_whole_group():
+    """A probe that times out takes its children with it (mtr's mtr-packet and AS lookup child)."""
+    with tempfile.TemporaryDirectory() as d:
+        pid = Path(d, "pid")
+        try:
+            st.run(["sh", "-c", f"sleep 30 & echo $! > {pid}; wait"], 1)
+            raise AssertionError("no timeout")
+        except subprocess.TimeoutExpired:
+            pass
+        child = int(pid.read_text())
+        for _ in range(50):
+            try:
+                os.kill(child, 0)
+                if Path(f"/proc/{child}/stat").read_text().split(")")[1].split()[0] == "Z":
+                    break        # killed, only waiting for its reaper (tini in the image)
+            except (ProcessLookupError, FileNotFoundError):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("the child outlived the timeout")
+    r = st.run(["sh", "-c", "echo out; echo err >&2; exit 3"], 5)
+    assert (r.returncode, r.stdout, r.stderr) == (3, "out\n", "err\n")
 
 
 def test_trace_step():

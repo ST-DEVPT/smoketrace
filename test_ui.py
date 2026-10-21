@@ -172,6 +172,9 @@ with sync_playwright() as p:
     pg.wait_for_function("S.det && S.cmp")
     r = pg.evaluate(f"[S.det.source === S.b.targets.find(x => x.id === '{worst}').src, S.cmp.sources.length]")
     check("a target in All shows its worst site with every site on the chart", r == [True, 2], r)
+    pg.wait_for_function("(S.traces || []).length === 1 && document.querySelectorAll('#trace table.hops').length === 2")
+    r = pg.evaluate("[...document.querySelectorAll('#trace .tsite b')].map(b => b.textContent)")
+    check("and every site's traceroute, under its name", sorted(r) == ["local", "porto"], r)
     pg.keyboard.press("Escape")
     pg.wait_for_function("!S.id")
 

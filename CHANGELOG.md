@@ -2,6 +2,17 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.11.0] - 2026-10-21
+
+- **Agents and servers no longer run out of processes.** In the image, Python was PID 1: each mtr killed for
+  running too long left its helpers (mtr-packet, the child that looks up AS numbers) as zombies nobody reaped,
+  until mtr could not fork, fping failed with "Resource temporarily unavailable" and every round stopped with
+  "can't start new thread". `tini` is now PID 1 and reaps them, and a probe that times out is killed with its
+  whole process group. CI checks that the containers run under tini with no zombies.
+- **Every site's traceroute.** When a target's page compares sites (always with *All*), the traceroute panel
+  shows each site's traceroute of the same moment, one under the other with the site's name, and *Latency by hop*
+  draws one chart per site.
+
 ## [0.10.0] - 2026-10-21
 
 - **Every site on one page.** With agents, *Seen from* starts with **All**, now the default: each target shows

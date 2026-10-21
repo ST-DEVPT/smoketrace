@@ -295,6 +295,9 @@ table.hops .tag { display: flex; width: max-content; margin: 2px 0 0 auto; }   /
 .dl { font-weight: 650; }
 .foot { margin: 0; padding: 12px 0 0; font-size: 12px; color: var(--ink-3); }
 .hopchart { display: block; width: 100%; height: 190px; }
+.tsite { margin: 22px 0 10px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.tsite b { color: var(--ink); font-weight: 600; }
+.ph + .tsite, .pb > .tsite:first-child { margin-top: 4px; padding-top: 0; border-top: 0; }
 details.panel { border-bottom: 1px solid var(--line); }
 details.panel > summary { list-style: none; cursor: pointer; padding: 14px 0; font-size: 13.5px; font-weight: 600; }
 details.panel > summary::-webkit-details-marker { display: none; }
@@ -1414,13 +1417,16 @@ async function loadDetail() {
 }
 async function loadTrace() {
   const id = S.id, sel = S.sel, tok = ++REQ.trace;
+  // comparing sites: every other site's traceroute of the same moment comes along, shown under this one
+  const others = cmpOn() && S.cmp ? S.cmp.sources.map(x => x.name).filter(n => n !== S.det?.source) : [];
+  const get = q => api(`/api/trace?id=${encodeURIComponent(id)}&vs=${S.vs}${sel ? `&ts=${sel}` : ""}${q}`);
   try {
-    const tr = await api(`/api/trace?id=${encodeURIComponent(id)}&vs=${S.vs}${sel ? `&ts=${sel}` : ""}${qsrc(id)}`);
+    const [tr, ...more] = await Promise.all([get(qsrc(id)), ...others.map(n => get(`&src=${encodeURIComponent(n)}`).catch(() => ({ error: true })))]);
     if (tok !== REQ.trace || S.id !== id) return;
-    S.trace = tr;
+    S.trace = tr; S.traces = others.map((name, i) => ({ name, tr: more[i] }));
   } catch {
     if (tok !== REQ.trace || S.id !== id) return;
-    S.trace = { error: true };
+    S.trace = { error: true }; S.traces = [];
   }
   S.traceFor = sel;
   renderTrace(); renderHops(); drawChart();
@@ -1662,12 +1668,20 @@ function lossCell(h, origin) {
 function renderTrace() {
   const el = $("#trace");
   if (!el) return;
-  const tr = S.trace;
+  const tr = S.trace, more = tr && !tr.error ? S.traces || [] : [];
   const head = `<div class="ph"><h2>Traceroute · mtr</h2><span class="grow"></span>
     <span class="seg" role="group" aria-label="${t("compareAria")}"><button data-vs="route" aria-pressed="${S.vs === "route"}">${t("vsRoute")}</button><button data-vs="round" aria-pressed="${S.vs === "round"}">${t("vsRound")}</button></span></div>`;
   if (!tr) { el.innerHTML = head + `<div class="empty">${t("loading")}</div>`; return; }
   if (tr.error) { el.innerHTML = head + empty(t("traceErr"), `<button class="btn" data-act="retrace">${t("tryAgain")}</button>`); return; }
-  if (!tr.cur) { el.innerHTML = head + empty(t("noTracesT"), t("noTracesB")); return; }
+  const site = name => more.length ? `<h3 class="tsite">${t("seenFrom")} <b>${esc(name)}</b></h3>` : "";
+  el.innerHTML = head + site(S.det?.source || "") + traceBlock(tr, true)
+    + more.map(x => site(x.name) + traceBlock(x.tr, false)).join("") + `<p class="foot">${t("foot")}</p>`;
+}
+// one site's traceroute against its previous route or round; `main`: the site the page is about (it has the
+// "latest" control, the others follow the moment it shows)
+function traceBlock(tr, main) {
+  if (tr.error) return `<p class="note">${t("traceErr")}</p>`;
+  if (!tr.cur) return main ? empty(t("noTracesT"), t("noTracesB")) : `<p class="note">${t("noTracesT")}</p>`;
   const { cur, prev, rows } = tr;
   const n = st => rows.filter(r => r.state === st).length;
   const nc = n("changed"), na = n("added"), nr = n("removed"), nu = n("unknown");
@@ -1691,15 +1705,14 @@ function renderTrace() {
       <td class="num mono" ${c?.sd != null ? `title="${t("cSd")} ${msU(c.sd)}"` : ""}>${c?.avg != null ? `<span class="barw"><span class="bar" style="width:${Math.max(2, c.avg / maxAvg * 100)}%"></span></span>${msU(c.avg)}` : '<span class="dim">—</span>'}</td>
       ${prev ? `<td class="num mono hide-s${dv != null && Math.abs(dv) >= 10 ? " dl" : ""}">${dv == null ? "—" : `${dv >= 0 ? "+" : "−"}${ms(Math.abs(dv))}`}</td>` : ""}</tr>`;
   }).join("");
-  el.innerHTML = head + `<div class="tmeta">
-      <div><span class="cap">${t("now")}</span>${rb(cur.label, cur.route)}<b class="mono">${at(cur.ts)}</b>${S.sel ? `<button class="link" data-act="latest">${t("goLatest")}</button>` : `<span class="dim">${t("latest")}</span>`}</div>
+  return `<div class="tmeta">
+      <div><span class="cap">${t("now")}</span>${rb(cur.label, cur.route)}<b class="mono">${at(cur.ts)}</b>${!main ? "" : S.sel ? `<button class="link" data-act="latest">${t("goLatest")}</button>` : `<span class="dim">${t("latest")}</span>`}</div>
       <div><span class="cap">${t("before")}</span>${prev ? `${rb(prev.label, prev.route)}<span class="mono">${at(prev.ts)}</span>` : '<span class="dim">—</span>'}</div>
       <div class="tsum">${sum}</div></div>
     ${stuck ? `<p class="note bad">${icon("down")} ${stuck}</p>` : ""}${tr.fallback ? `<p class="note">${t("fallback")}</p>` : ""}
     <div class="tw"><table class="hops"><thead><tr><th class="num"><button>#</button></th><th class="rm" aria-hidden="true"></th>${differs ? `<th class="hide-s"><button>${t("before")}</button></th>` : ""}<th><button>${t("now")}</button></th>
       <th class="num"><button>${t("cLoss")}</button></th><th class="num"><button>${t("cAvg")}</button></th>
-      ${prev ? `<th class="num hide-s"><button>${t("cDelta")}</button></th>` : ""}</tr></thead><tbody>${body}</tbody></table></div>
-    <p class="foot">${t("foot")}</p>`;
+      ${prev ? `<th class="num hide-s"><button>${t("cDelta")}</button></th>` : ""}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 // One cell per hop: the current route's line and, when it differs, the previous route's line beside it. Where
 // both pass through the same router they run as one; where they part they run side by side; a station marks
@@ -1734,6 +1747,12 @@ function renderHops() {
   if (!el) return;
   const head = `<div class="ph"><h2>${t("hopsTitle")}</h2><span class="grow"></span>`;
   if (!tr?.cur) { el.innerHTML = head + `</div><div class="empty" style="padding:24px">${t("loading")}</div>`; return; }
+  const more = (S.traces || []).filter(x => x.tr?.cur);
+  const site = name => more.length ? `<h3 class="tsite">${esc(name)}</h3>` : "";
+  el.innerHTML = head + `<span class="clegend"><span><i class="lg-sq" style="--c:var(--accent)"></i>${t("hopsNow")}</span>${tr.prev || more.some(x => x.tr.prev) ? `<span><i class="lg-line"></i>${t("hopsBefore")}</span>` : ""}</span></div>
+    <div class="pb">${site(S.det?.source || "")}${hopChart(tr)}${more.map(x => site(x.name) + hopChart(x.tr)).join("")}</div>`;
+}
+function hopChart(tr) {
   const hops = tr.cur.hops, prev = new Map((tr.prev?.hops || []).map(h => [h.ttl, h.avg]));
   const W = 340, H = 180, l = 34, r = 8, tp = 10, b = 22, n = hops.length;
   const max = Math.max(1, ...hops.map(h => h.avg || 0), ...[...prev.values()].filter(Boolean)) * 1.1;
@@ -1748,8 +1767,7 @@ function renderHops() {
     if (pv != null) svg += `<line x1="${x - 2}" x2="${x + w + 2}" y1="${Y(pv)}" y2="${Y(pv)}" stroke="var(--ink)" stroke-width="2" stroke-linecap="round"/>`;
     svg += `<text x="${x + w / 2}" y="${H - 6}" text-anchor="middle" font-size="9.5" fill="var(--ink-3)" font-family="Plex Mono, monospace">${h.ttl}</text>`;
   });
-  el.innerHTML = head + `<span class="clegend"><span><i class="lg-sq" style="--c:var(--accent)"></i>${t("hopsNow")}</span>${tr.prev ? `<span><i class="lg-line"></i>${t("hopsBefore")}</span>` : ""}</span></div>
-    <div class="pb"><svg class="hopchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${t("hopsTitle")}">${svg}</svg></div>`;
+  return `<svg class="hopchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${t("hopsTitle")}">${svg}</svg>`;
 }
 function renderRaw() {
   const d = S.det;

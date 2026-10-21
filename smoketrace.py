@@ -25,6 +25,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import socket
 import sqlite3
 import statistics
@@ -44,7 +45,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.10.0"           # the top of CHANGELOG.md says the same; a test checks
+VERSION = "0.11.0"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
@@ -510,6 +511,23 @@ def parse_fping(text):
     return out
 
 
+def run(cmd, timeout):
+    """subprocess.run in a process group of its own: a timeout kills the whole group, so mtr's helpers
+    (mtr-packet, the child that looks up AS numbers) go with it instead of piling up until no process or thread
+    can start. Every process is waited for here; tini, PID 1 in the image, reaps whatever escapes."""
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True) as p:
+        try:
+            out, err = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            p.communicate()
+            raise
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+
+
 def fping_timeout(n_hosts):
     """-i10 spaces every packet 10 ms apart across all hosts, so a round needs at least hosts*pings*10ms."""
     return min(max(PINGS * 3 + 30, n_hosts * PINGS * 0.015 + 30), max(STEP - 10, PINGS * 3 + 30))
@@ -518,8 +536,7 @@ def fping_timeout(n_hosts):
 def fping(hosts):
     # Same flags as SmokePing's FPing probe; one fping call covers every ICMP target.
     hosts = sorted(set(hosts))
-    r = subprocess.run(["fping", "-C", str(PINGS), "-q", "-B1", "-r1", "-i10", *hosts],
-                       capture_output=True, text=True, timeout=fping_timeout(len(hosts)))
+    r = run(["fping", "-C", str(PINGS), "-q", "-B1", "-r1", "-i10", *hosts], fping_timeout(len(hosts)))
     return parse_fping(r.stderr)   # exit code 1/2 just means some host was unreachable
 
 
@@ -616,7 +633,7 @@ def mtr_command(t):
 
 def mtr(t, _ts):
     # ponytail: mtr cannot pin a flow (its --localport gets no UDP answers back); ECMP shows as routes taking turns
-    r = subprocess.run(mtr_command(t), capture_output=True, text=True, timeout=MTR_CYCLES * 4 + 60)
+    r = run(mtr_command(t), MTR_CYCLES * 4 + 60)
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip() or f"mtr exit {r.returncode}")
     hops = parse_mtr(r.stdout)

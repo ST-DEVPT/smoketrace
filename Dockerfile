@@ -5,7 +5,7 @@ FROM python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d75060
 # pip and setuptools only install packages, and smoketrace installs none: they go, with what they bundle.
 RUN python -m pip uninstall -y pip setuptools wheel; \
     rm -rf /usr/local/lib/python3*/ensurepip /root/.cache; \
-    apk add --no-cache fping mtr tzdata \
+    apk add --no-cache fping mtr tini tzdata \
  && mkdir /data
 
 WORKDIR /app
@@ -20,4 +20,7 @@ EXPOSE 8099
 # a push agent (SERVER) serves nothing; a pull agent (LISTEN=host:port) answers on its own port
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
   CMD [ -n "$SERVER" ] || wget -qO- "http://127.0.0.1:${LISTEN:+${LISTEN##*:}}${LISTEN:-${PORT:-8099}}/livez" >/dev/null || exit 1
+# tini as PID 1 reaps every process that ends up orphaned (mtr's helpers when an mtr is killed); Python as PID 1
+# would leave them as zombies until the container cannot start a process or a thread. -s: also under `init: true`.
+ENTRYPOINT ["/sbin/tini", "-s", "--"]
 CMD ["python", "smoketrace.py"]

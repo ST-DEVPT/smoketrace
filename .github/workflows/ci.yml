@@ -180,6 +180,10 @@ jobs:
           cat ov.json edge.json; exit 1
       - name: Prometheus metrics
         run: curl -fs 127.0.0.1:8099/metrics | tee metrics.txt | grep -q 'smoketrace_median_seconds{target="lan-loopback"'
+      - name: tini is PID 1, so mtr's orphaned helpers are reaped, not left as zombies
+        run: |
+          for c in server agent; do test "$(docker exec $c cat /proc/1/comm)" = tini; done
+          ! docker exec server sh -c 'grep -l "^State:.*Z" /proc/[0-9]*/status' 2>/dev/null | grep -q .
       - name: The page and its fonts are in the image
         run: curl -fs 127.0.0.1:8099/ | grep -q "<title>smoketrace</title>" && curl -fs -o /dev/null -D - 127.0.0.1:8099/fonts/archivo.woff2 | grep -qi "font/woff2"
       - name: Docker reports the server healthy
