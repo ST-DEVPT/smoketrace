@@ -17,8 +17,10 @@ import gzip
 import base64
 import bisect
 import configparser
+import functools
 import hashlib
 import hmac
+import ipaddress
 import json
 import math
 import os
@@ -36,7 +38,7 @@ import threading
 import time
 import unicodedata
 import urllib.request
-from collections import Counter, deque
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -45,7 +47,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.12.0"           # the top of CHANGELOG.md says the same; a test checks
+VERSION = "0.13.0"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
@@ -751,6 +753,42 @@ def dns_txt(name, server):
     return out
 
 
+MYIP = ("216.239.32.10", "o-o.myaddr.l.google.com")    # Google's name server answers with the asker's address
+MY_IP = {"at": 0, "ip": None}
+
+
+def site_ip(v):
+    """v if it is a public address (what a site may say it has), else None."""
+    try:
+        return str(ipaddress.ip_address(v)) if isinstance(v, str) and ipaddress.ip_address(v).is_global else None
+    except ValueError:
+        return None
+
+
+def my_ip(now=None):
+    """This machine's public IPv4 address as the internet sees it, asked once an hour; None with ASN=0 or offline.
+    One DNS question straight to one of Google's name servers, which answers with the address it came from."""
+    now = now or time.time()
+    if ASN_LOOKUP and now - MY_IP["at"] >= 3600:
+        try:
+            got = site_ip((dns_txt(MYIP[1], MYIP[0]) or [""])[0])
+        except (OSError, struct.error, IndexError):
+            got = None
+        MY_IP.update(at=now if got else now - 3000, ip=got or MY_IP["ip"])     # a failure is retried in 10 min
+    return MY_IP["ip"]
+
+
+def origin(ip):
+    """(AS, prefix, country) the address is announced from, by Team Cymru: ("AS3243", "1.2.3.0/24", "PT")."""
+    rev = ipaddress.ip_address(ip).reverse_pointer.rsplit(".", 2)[0]
+    zone = "origin.asn.cymru.com" if ipaddress.ip_address(ip).version == 4 else "origin6.asn.cymru.com"
+    txt = dns_txt(f"{rev}.{zone}", resolver())
+    if not txt:
+        return "", None, None                  # announced by nobody: not looked up again
+    asn, prefix, cc = [x.strip() for x in txt[0].split("|")[:3]]
+    return f"AS{asn.split()[0]}", prefix, cc if re.fullmatch(r"[A-Z]{2}", cc) else None
+
+
 def resolver():
     try:
         for line in Path("/etc/resolv.conf").read_text().splitlines():
@@ -766,6 +804,17 @@ def asn_namer(path):
     """Fill in the names of AS numbers seen in traces: "AS13335" -> "CLOUDFLARENET - Cloudflare, Inc., US"."""
     while True:
         try:
+            with db_open(path) as db:     # sites first: their AS gets its name below
+                sites = db.execute("SELECT name, ip FROM site WHERE ip IS NOT NULL AND asn IS NULL").fetchall()
+            for name, ip in sites:
+                try:
+                    asn, prefix, cc = origin(ip)
+                except (OSError, ValueError, IndexError, struct.error):
+                    continue                    # asked again in a minute
+                with db_open(path) as db:
+                    db.execute("UPDATE site SET asn=?, prefix=?, cc=? WHERE name=? AND ip=?", (asn, prefix, cc, name, ip))
+                    if asn:
+                        db.execute("INSERT OR IGNORE INTO asn VALUES (?, NULL, 0)", (asn,))
             with db_open(path) as db:
                 todo = [r[0] for r in db.execute(
                     "SELECT asn FROM asn WHERE name IS NULL OR (name = '' AND ts < ?) LIMIT 50", (time.time() - 86400,))]
@@ -1011,6 +1060,10 @@ def init_db(path, source):
         db.execute("CREATE TABLE IF NOT EXISTS asn (asn TEXT PRIMARY KEY, name TEXT, ts INTEGER) WITHOUT ROWID")
         # one row per stored round: "when did each source last report" without scanning every ping
         db.execute("CREATE TABLE IF NOT EXISTS rounds (source TEXT, ts INTEGER, PRIMARY KEY (source, ts)) WITHOUT ROWID")
+        # each site (this server, its agents): its public address and what that is announced from (found), and
+        # where it is as typed in on the Sites page (place, country, provider, note: these win over what was found)
+        db.execute("CREATE TABLE IF NOT EXISTS site (name TEXT PRIMARY KEY, ip TEXT, asn TEXT, prefix TEXT, cc TEXT,"
+                   " place TEXT, country TEXT, provider TEXT, note TEXT) WITHOUT ROWID")
         if old and "source" not in old:
             db.execute("INSERT INTO ping SELECT ?, * FROM ping_v1", (source,))
             db.execute("INSERT INTO trace (source, target, ts, hops) SELECT ?, * FROM trace_v1", (source,))
@@ -1034,6 +1087,56 @@ def fill_paths(path, pairs):
         n += len(rows)
     if n:
         log(f"{n} older traces indexed by route")
+
+
+def note_site(path, name, ip):
+    """A site's public address; a new one is looked up again (its network and country) by the AS namer."""
+    if not ip:
+        return
+    with db_open(path) as db:
+        db.execute("INSERT INTO site (name, ip) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET ip=excluded.ip,"
+                   " asn=NULL, prefix=NULL, cc=NULL WHERE ip IS NOT excluded.ip", (name, ip))
+
+
+SITE_FIELDS = {"place": 60, "country": 2, "provider": 60, "note": 200}
+
+
+def edit_site(path, sources, d):
+    """What the Sites page typed in for one site; empty fields fall back to what was found."""
+    if not isinstance(d, dict) or d.get("name") not in sources:
+        raise ValueError("name: no such site")
+    vals = {}
+    for k, n in SITE_FIELDS.items():
+        v = d.get(k) if d.get(k) is not None else ""
+        if not isinstance(v, str):
+            raise ValueError(f"{k}: text only")
+        v = " ".join(v.split())
+        if len(v) > n:
+            raise ValueError(f"{k}: at most {n} characters")
+        vals[k] = v or None
+    if vals["country"]:
+        vals["country"] = vals["country"].upper()
+        if not re.fullmatch(r"[A-Z]{2}", vals["country"]):
+            raise ValueError("country: two letters, like PT")
+    with db_open(path) as db:
+        db.execute("INSERT INTO site (name, place, country, provider, note) VALUES (?,?,?,?,?) ON CONFLICT(name) DO"
+                   " UPDATE SET place=excluded.place, country=excluded.country, provider=excluded.provider,"
+                   " note=excluded.note", (d["name"], *vals.values()))
+
+
+def site_info(db, sources):
+    """name -> what is known of each site: found (ip, asn, prefix, as_name, found_cc), typed in (place, country,
+    provider, note), and what the page shows (cc, network): typed in, else found."""
+    rows = {r[0]: r[1:] for r in db.execute("SELECT name, ip, asn, prefix, cc, place, country, provider, note FROM site")}
+    names = dict(db.execute("SELECT asn, name FROM asn WHERE asn IN (SELECT asn FROM site)"))
+    out = {}
+    for s in sources:
+        ip, asn, prefix, cc, place, country, provider, note = rows.get(s, (None,) * 8)
+        m = re.fullmatch(r"(?:.* - )?(.*?)(?:, ([A-Z]{2}))?", names.get(asn) or "")
+        out[s] = {"ip": ip, "asn": asn or None, "prefix": prefix, "as_name": m.group(1) or None, "found_cc": cc,
+                  "place": place, "country": country, "provider": provider, "note": note,
+                  "cc": country or cc, "network": provider or m.group(1) or None}
+    return out
 
 
 def round_rows(source, ts, pings, traces):
@@ -1131,7 +1234,7 @@ def run_agent(server, token, ping_fn, trace_fn):
         if targets:
             pings, traces = probe_round(targets, ts, ping_fn, trace_fn, lossy.fresh)
             lossy.update(pings)
-            backlog.append({"ts": ts, "pings": pings, "traces": traces})
+            backlog.append({"ts": ts, "pings": pings, "traces": traces, "ip": my_ip()})     # "ip": 0.13
         while backlog:
             try:
                 call("/api/agent/push", backlog[0])
@@ -1147,7 +1250,7 @@ def run_agent(server, token, ping_fn, trace_fn):
 def run_listener(listen, token, ping_fn, trace_fn):
     """Pull mode: the server comes to us each round with our targets and takes the rounds we have."""
     host, _, port = listen.rpartition(":")
-    state = {"targets": [], "backlog": deque(maxlen=AGENT_BACKLOG), "lossy": Lossy()}
+    state = {"targets": [], "backlog": deque(maxlen=AGENT_BACKLOG), "lossy": Lossy(), "ip": None}
     lock = threading.Lock()
 
     class Pull(BaseHTTPRequestHandler):
@@ -1170,7 +1273,7 @@ def run_listener(listen, token, ping_fn, trace_fn):
                     rounds = list(state["backlog"])[:PULL_BATCH]
             except (ValueError, KeyError, TypeError, AttributeError) as e:
                 return self.reply(400, json.dumps({"error": str(e)}).encode())
-            self.reply(200, json.dumps({"rounds": rounds}, separators=(",", ":")).encode())
+            self.reply(200, json.dumps({"rounds": rounds, "ip": state["ip"]}, separators=(",", ":")).encode())
 
         def reply(self, code, body):
             self.send_response(code)
@@ -1183,6 +1286,7 @@ def run_listener(listen, token, ping_fn, trace_fn):
             pass
 
     def one(ts):
+        state["ip"] = my_ip()
         with lock:
             targets = list(state["targets"])
         if targets:
@@ -1210,10 +1314,12 @@ def pull_agent(path, name, agent):
                                               "Content-Type": "application/json", "User-Agent": "smoketrace"})
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
-                rounds = json.load(r)["rounds"]
+                got = json.load(r)
+            rounds = got["rounds"]
         except Exception as e:
             log(f"cannot pull from {name} ({agent['url']}): {e}")
             return
+        note_site(path, name, site_ip(got.get("ip")))
         now, ids = int(time.time()), {t["id"] for t in mine}
         for r in rounds if isinstance(rounds, list) else []:
             try:
@@ -1483,11 +1589,12 @@ def board(db, sources, src, targets, rng, now):
                 agent_ev += [{"ts": a + STEP, "kind": "quiet", "source": name}, {"ts": b, "kind": "back", "source": name}]
     last = last_rounds(db)
     events = sorted(events + agent_ev, key=lambda e: -e["ts"])[:500]
-    nets = site_networks(db, sources, targets)
+    info = site_info(db, sources)
     return {"now": now, "step": STEP, "trace_step": trace_rounds() * STEP, "editable": editable_why() is None,
             "source": src, "range": rng, "start": start, "width": width, "cells": nb,
             "auth": bool(PASSWORD), "version": VERSION, "targets": out,
-            "sources": [{"name": x, "last_ts": last.get(x), **nets.get(x, {})} for x in sources],
+            "sources": [{"name": x, "last_ts": last.get(x), **{k: info[x][k] for k in ("ip", "asn", "cc", "network", "place")}}
+                        for x in sources],
             "fleet": [round(statistics.median(f), 1) if f else None for f in fleet],
             "problems": problems, "clusters": clusters, "local": local, "events": events,
             "loss_warn": LOSS_WARN, "loss_crit": LOSS_CRIT}
@@ -1529,34 +1636,14 @@ def refresh_board(src, rng):
 
 def warm_boards(now=None):
     """After a round: bring the boards someone is watching up to date before they ask again. Only those: a week of
-    every site costs seconds of CPU, and nobody should pay that every round for a view opened once yesterday."""
+    every site costs seconds of CPU, and nobody should pay that every round for a view opened once yesterday.
+    An idle board is kept as it was: whoever opens it next sees it at once, and a fresh one follows."""
     now = now or time.time()
     for key, at in list(WATCHED.items()):
         if now - at <= WATCH_FOR:
             refresh_board(*key)
         else:
             WATCHED.pop(key, None)
-            BOARD_CACHE.pop(key, None)
-
-
-def site_networks(db, sources, targets):
-    """Where each site is, from its own traceroutes: the network of the first hop that has an AS number (its
-    provider), with the operator and the country from that AS's name. Nothing is asked of any outside service."""
-    out = {}
-    for s in sources:
-        seen = Counter()
-        for t in [t for t in targets if s in probers(t, sources)][:12]:
-            row = db.execute("SELECT hops FROM trace WHERE source=? AND target=? ORDER BY ts DESC LIMIT 1", (s, t["id"])).fetchone()
-            hop = next((h for h in json.loads(row[0]) if h.get("asn")), None) if row else None
-            if hop:
-                seen[hop["asn"]] += 1
-        if not seen:
-            continue
-        asn = seen.most_common(1)[0][0]
-        name = (db.execute("SELECT name FROM asn WHERE asn=?", (asn,)).fetchone() or [None])[0] or ""
-        m = re.fullmatch(r"(?:.* - )?(.*?)(?:, ([A-Z]{2}))?", name)
-        out[s] = {"asn": asn, "as_name": m.group(1) or None, "cc": m.group(2)}
-    return out
 
 
 def merge_boards(boards):
@@ -1863,6 +1950,12 @@ for(const k in T)document.getElementById(k).textContent=T[k];const e=document.qu
 
 # ---------- HTTP ----------
 
+@functools.lru_cache(maxsize=8)
+def gzipped(body):
+    """A board is sent to every viewer as it is: compressed once (bytes keep their hash, so a hit costs nothing)."""
+    return gzip.compress(body, 5)
+
+
 class Handler(BaseHTTPRequestHandler):
     db = None
     targets = []
@@ -1905,6 +1998,8 @@ class Handler(BaseHTTPRequestHandler):
             with db_open(self.db) as db:
                 if u.path == "/api/targets":
                     return self.json(self.target_list())
+                if u.path == "/api/sites":
+                    return self.json(self.site_list(db))
                 if u.path == "/api/overview":
                     return self.json(overview(db, self.sources, src, self.targets, now))
                 if u.path == "/api/board":
@@ -1946,6 +2041,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(401, page.encode(), "text/html; charset=utf-8")
         if path == "/api/targets":
             return self.edit_targets(body)
+        if path == "/api/sites":
+            return self.edit_site(body)
         if path != "/api/agent/push":
             return self.send(404, b'{"error":"not found"}', "application/json")
         name = self.agent()
@@ -1958,6 +2055,9 @@ class Handler(BaseHTTPRequestHandler):
             log(f"rejected a round from {name}: {e}")
             return self.send(400, b'{"error":"bad round"}', "application/json")
         store(self.db, *round_rows(name, ts, pings, traces), now)
+        # where it is: what it says (0.13 agents), else the address its push came from, when that is a public one
+        fwd = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        note_site(self.db, name, site_ip(json.loads(body).get("ip")) or site_ip(fwd or self.client_address[0]))
         ALERTS.check(self.db, name)
         self.json({"ok": True})
 
@@ -1984,6 +2084,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.fresh_board(db, src, rng, now)
         if ver != last_rounds(db) or now - at >= STEP:
             refresh_board(src, rng)
+            return data, b'{"refreshing":true,' + body[1:]     # the page asks again in a few seconds
         return data, body
 
     def target_list(self):
@@ -1992,6 +2093,33 @@ class Handler(BaseHTTPRequestHandler):
                 "sources": self.sources, "targets": [{"id": t["id"], **{k: (address(t) if k == "address" else t[k])
                                                                       for k in EDITABLE}, "probe": t["probe"]}
                                                      for t in self.targets]}
+
+    def site_list(self, db):
+        why, info, last = editable_why(), site_info(db, self.sources), last_rounds(db)
+        kind = lambda s: "local" if s == self.sources[0] else "pull" if self.agents.get(s, {}).get("url") else "push"
+        return {"editable": why is None, "why": why, "asn": ASN_LOOKUP, "now": int(time.time()), "step": STEP,
+                "sites": [{"name": s, "kind": kind(s), "url": self.agents.get(s, {}).get("url"), "last_ts": last.get(s),
+                           "targets": sum(s in probers(t, self.sources) for t in self.targets), **info[s]}
+                          for s in self.sources]}
+
+    def edit_site(self, body):
+        """Where a site is, as typed in on the page: same guard as the targets (signed in, JSON only)."""
+        if not signed_in(self.headers.get("Cookie")):
+            return self.send(401, b'{"error":"sign in"}', "application/json")
+        if editable_why() or "application/json" not in self.headers.get("Content-Type", ""):
+            return self.send(403, b'{"error":"editing is off"}', "application/json")
+        try:
+            d = json.loads(body)
+            edit_site(self.db, self.sources, d)
+        except (ValueError, AttributeError, TypeError) as e:
+            field, _, msg = str(e).partition(": ")
+            return self.send(400, json.dumps({"error": msg or str(e), "field": field if msg else None}).encode(),
+                             "application/json")
+        for key, v in list(BOARD_CACHE.items()):
+            BOARD_CACHE[key] = (0, *v[1:])      # the boards carry the sites too: rebuilt when next asked for
+        log(f"site edited on the page: {d['name']}")
+        with db_open(self.db) as db:
+            self.json({"ok": True, **self.site_list(db)})
 
     def edit_targets(self, body):
         """The page's edits: signed in, JSON only (a cross-site form cannot send it), written to targets.json."""
@@ -2047,7 +2175,7 @@ class Handler(BaseHTTPRequestHandler):
     def send(self, code, body, ctype, cache=False):
         zipped = len(body) > 1400 and "gzip" in self.headers.get("Accept-Encoding", "") and not ctype.startswith("font/")
         if zipped:
-            body = gzip.compress(body, 5)
+            body = gzipped(body)
         self.send_response(code)
         if zipped:
             self.send_header("Content-Encoding", "gzip")
@@ -2294,6 +2422,7 @@ def after_round(db, a):
     """The server's own round is stored: alerts, then the agents the server pulls from."""
     def run(ts):
         warm_boards()
+        note_site(db, a.name, my_ip())
         ALERTS.check(db, a.name)
         ALERTS.sources(db, int(time.time()))
         for name, agent in Handler.agents.items():
@@ -2368,6 +2497,10 @@ def main():
         init_db(db, a.name)
         probes = {a.name: demo_probes(t0), DEMO_AGENT: demo_probes(t0, remote=True)}
         Handler.db, Handler.targets, Handler.sources, Handler.agents = db, targets, list(probes), {}
+        with db_open(db) as c:      # where the two demo sites are (documentation addresses)
+            c.executemany("INSERT OR REPLACE INTO site (name, ip, asn, prefix, cc, place) VALUES (?,?,?,?,?,?)",
+                          [(a.name, "192.0.2.10", "AS64496", "192.0.2.0/24", "PT", "Lisbon, office"),
+                           (DEMO_AGENT, "198.51.100.20", "AS64500", "198.51.100.0/24", "PT", None)])
         core = [t for t in targets if not t["group"].startswith(("Sites", "Cloud"))]
         fleet = [t for t in targets if t not in core]
         for name, (ping_fn, trace_fn) in probes.items():
@@ -2388,6 +2521,7 @@ def main():
         threading.Thread(target=fill_paths, args=(db, [(s, t["id"]) for s in Handler.sources for t in Handler.targets]),
                          daemon=True).start()
         Handler.db = db
+    refresh_board(ALL if len(Handler.sources) > 1 else Handler.sources[0], 86400)     # what the page opens on
 
     extras = [x for x, on in (("sign-in", PASSWORD), ("alerts", ALERTS.enabled()), ("metrics token", METRICS_TOKEN)) if on]
     timing = f"pings every {STEP} s" + (f", traces every {trace_rounds() * STEP} s" if trace_rounds() > 1 else "")

@@ -19,7 +19,7 @@
   --ink: #ebe9e4; --ink-2: #aaa79f; --ink-3: #8f8c84;
   --brand: #ff6a33; --accent: #6eb0cf; --accent-soft: rgba(110, 176, 207, .09); --on-bad: #111110;
   --ok: #7fbf6a; --warn: #e2b341; --crit: #f08a3c; --down: #f0524a; --stale: #6b6860;
-  --cell-ok: #2c2b28; --cell-none: #3a3834; --lat-0: #2c2b28; --sel: rgba(110, 176, 207, .3); --lat-1: #e2b341; --lat-2: #f0524a;
+  --cell-ok: #344a2f; --cell-none: #3a3834; --lat-0: #2c2b28; --sel: rgba(110, 176, 207, .3); --lat-1: #e2b341; --lat-2: #f0524a;
   --route-1: #6eb0cf; --route-2: #b69ae0; --route-3: #5fbf9f; --route-x: #8f8c84;
   --src-2: #e48fb4; --src-3: #d8c06a;
   --smoke: 235, 233, 228; --grid: #222120; --axis: #3a3834; --shadow: 0 6px 20px rgba(0, 0, 0, .35);
@@ -31,7 +31,7 @@
   --ink: #171717; --ink-2: #4f4d48; --ink-3: #6b6860;
   --brand: #c2410c; --accent: #2c6b8a; --accent-soft: rgba(44, 107, 138, .08); --on-bad: #ffffff;
   --ok: #3b7a39; --warn: #a66f00; --crit: #cc5f0c; --down: #c0301c; --stale: #a9a499;
-  --cell-ok: #dbd7cd; --cell-none: #b9b4a8; --lat-0: #dbd7cd; --sel: rgba(44, 107, 138, .22); --lat-1: #d9a21b; --lat-2: #c0301c;
+  --cell-ok: #c3d6b6; --cell-none: #b9b4a8; --lat-0: #dbd7cd; --sel: rgba(44, 107, 138, .22); --lat-1: #d9a21b; --lat-2: #c0301c;
   --route-1: #2c6b8a; --route-2: #6d4bb0; --route-3: #1d7a5f; --route-x: #8a867d;
   --src-2: #b0436f; --src-3: #8a7210;
   --smoke: 23, 23, 23; --grid: #e4e0d7; --axis: #c7c2b6; --shadow: 0 6px 20px rgba(0, 0, 0, .1);
@@ -336,6 +336,10 @@ dialog.tdlg .tform { margin: 0; box-shadow: 0 18px 50px rgb(0 0 0 / .35); }
 td.act .link, .card .ft .link { font-size: 12.5px; }
 table.tlist td { height: 44px; }
 table.tlist td.act { width: 1%; text-align: right; }
+table.slist td { height: 52px; vertical-align: middle; }
+table.slist tr[aria-current="true"] td { background: var(--panel); }
+table.slist .sub { margin-top: 2px; font: 12px "Archivo", "Helvetica Neue", Helvetica, sans-serif; color: var(--ink-3); }
+table.slist .mono .sub { font-family: "Plex Mono", ui-monospace, Menlo, Consolas, monospace; }
 .tnav { display: grid; gap: 1px; margin-bottom: 4px; }
 .sk { display: inline-block; width: 6ch; height: .8em; border-radius: 3px; background: var(--panel-3); vertical-align: middle; }
 .sk.w2 { width: 14ch; } .sk.w3 { width: 40ch; max-width: 100%; }
@@ -468,6 +472,16 @@ const I18N = {
     signOut: "Sign out", langBtn: "PT", langTitle: "Português", themeDark: "Dark", themeLight: "Light", keys: "← → Enter",
     chartLbl: (n, a, b, c) => `Latency of ${n}: median between ${a} and ${b}; route: ${c}. A data table is below.`,
     noReply: "No reply", releaseNotes: "What changed in this version",
+    sitesNav: "Sites", sSite: "Site", sKind: "Kind", sIp: "Public address", sNet: "Network", sCountry: "Country", sPlace: "Place",
+    sCount: n => pl(n, "site", "sites"), sLast: "Last round", sTargets: "Targets", sNote: "Note", sProvider: "Provider",
+    sLocal: "this server", sPush: "agent, pushes", sPull: "agent, pulled",
+    sLede: "Each site finds its own public address once an hour (one DNS question to Google's name servers); the network and country it is announced from come from Team Cymru. Type a place, a country or a provider where what was found is wrong.",
+    sLedeOff: "ASN=0: sites do not look up their public address, so only what is typed in here is shown.",
+    sWhyPassword: "Read-only: set PASSWORD to edit sites here.", sWhyDemo: "The demo's sites are fixed.",
+    sEditTitle: n => `Where is ${n}?`, sPlaceHelp: "A city, a building, a rack: whatever tells you where it is.",
+    sCountryHelp: f => f ? `Two letters. Found: ${f}.` : "Two letters, like PT.", sProviderHelp: f => f ? `Found: ${f}.` : "Its ISP or host.",
+    sNoteHelp: "Anything else worth knowing: the link, who to call.", sSaved: n => `Saved ${n}.`, sNone: "Not known yet",
+    sNoIp: "No public address yet: an agent older than 0.13 sends none, and a pull agent is not seen from here.",
     targetsNav: "Targets", tAdd: "Add target", tAddTitle: "New target", tEditTitle: n => `Edit ${n}`, tEdit: "Edit",
     tName: "Name", tAddress: "Address", tProbe: "Probe", tProbedBy: "Probed by", tLimits: "Limits", tThisServer: "(this server)",
     tAllAgents: "every agent", tFilter: "Filter by name, group or address", tSave: "Save", tCancel: "Cancel", tRemove: "Remove",
@@ -550,6 +564,16 @@ const I18N = {
     signOut: "Sair", langBtn: "EN", langTitle: "English", themeDark: "Escuro", themeLight: "Claro", keys: "← → Enter",
     chartLbl: (n, a, b, c) => `Latência de ${n}: mediana entre ${a} e ${b}; rota: ${c}. Tabela de dados disponível abaixo.`,
     noReply: "Sem resposta", releaseNotes: "O que mudou nesta versão",
+    sitesNav: "Locais", sSite: "Local", sKind: "Tipo", sIp: "Endereço público", sNet: "Rede", sCountry: "País", sPlace: "Sítio",
+    sCount: n => pl(n, "local", "locais"), sLast: "Última ronda", sTargets: "Alvos", sNote: "Nota", sProvider: "Operador",
+    sLocal: "este servidor", sPush: "agente, envia", sPull: "agente, recolhido",
+    sLede: "Cada local descobre o seu endereço público uma vez por hora (uma pergunta DNS aos servidores de nomes da Google); a rede e o país de onde é anunciado vêm da Team Cymru. Escreva um sítio, um país ou um operador onde o que foi encontrado estiver errado.",
+    sLedeOff: "ASN=0: os locais não descobrem o endereço público, por isso só aparece o que for escrito aqui.",
+    sWhyPassword: "Só leitura: defina PASSWORD para editar os locais aqui.", sWhyDemo: "Os locais da demo são fixos.",
+    sEditTitle: n => `Onde fica ${n}?`, sPlaceHelp: "Uma cidade, um edifício, um bastidor: o que disser onde está.",
+    sCountryHelp: f => f ? `Duas letras. Encontrado: ${f}.` : "Duas letras, como PT.", sProviderHelp: f => f ? `Encontrado: ${f}.` : "O ISP ou alojamento.",
+    sNoteHelp: "O que mais valer a pena saber: a ligação, a quem ligar.", sSaved: n => `${n} guardado.`, sNone: "Ainda não se sabe",
+    sNoIp: "Ainda sem endereço público: um agente anterior à 0.13 não o envia, e um agente recolhido não é visto daqui.",
     targetsNav: "Alvos", tAdd: "Adicionar alvo", tAddTitle: "Novo alvo", tEditTitle: n => `Editar ${n}`, tEdit: "Editar",
     tName: "Nome", tAddress: "Endereço", tProbe: "Sonda", tProbedBy: "Medido por", tLimits: "Limites", tThisServer: "(este servidor)",
     tAllAgents: "todos os agentes", tFilter: "Filtrar por nome, grupo ou endereço", tSave: "Guardar", tCancel: "Cancelar", tRemove: "Remover",
@@ -641,7 +665,7 @@ const S = {
 };
 // every load takes a number; an answer that comes back after a newer request of its kind is dropped, so a slow
 // week-long board, a refresh or a range clicked twice can never paint over what the page now asks for
-const REQ = { board: 0, det: 0, trace: 0, tg: 0 };
+const REQ = { board: 0, det: 0, trace: 0, tg: 0, si: 0 };
 const byId = () => new Map((S.b?.targets || []).map(x => [x.id, x]));
 const ALL = "all";
 // the site whose figures a target shows: the one picked, or with every site at once the one where it is worst
@@ -675,6 +699,8 @@ async function loadBoard() {
     catch (e) { if (e.status !== 400 || !src) throw e; b = await api(`/api/board?range=${range}`); }   // a source that is gone
     if (tok !== REQ.board) return;
     S.b = b; S.src = b.source; S.bAt = Date.now(); setOffline(false);
+    S.rf = b.refreshing ? (S.rf || 0) + 1 : 0;          // a newer one is being made: asked for again soon
+    if (b.refreshing && S.rf <= 10) setTimeout(() => { if (tok === REQ.board) refresh(); }, 3000);
   } catch (e) {
     if (tok !== REQ.board) return;
     if (e.message !== "sign in") setOffline(true);
@@ -692,6 +718,7 @@ async function loadBoard() {
 async function refresh() {
   await loadBoard();
   if (S.id) await loadDetail();
+  if (S.tpage === "sites" && !SI.edit) loadSites();
 }
 
 // ---------- routing (filters live in the URL, so a view can be shared) ----------
@@ -725,12 +752,14 @@ function route() {
   document.body.classList.remove("drawer");
   $("#tip").hidden = true;
   if ($("#tdlg").open) { TG.edit = null; $("#tdlg").close(); }
-  if (path === "/targets") {
+  const page = { "/targets": "targets", "/sites": "sites" }[path];
+  if (page) {
     if (S.id == null && !S.tpage) S.place = { y: scrollY, hm: $("#hmScroll")?.scrollTop || 0, tw: $("#tw")?.scrollTop || 0 };
-    Object.assign(S, { tpage: true, id: null, det: null, trace: null, traceFor: undefined, sel: null, hover: null, cmp: null });
+    Object.assign(S, { tpage: page, id: null, det: null, trace: null, traceFor: undefined, sel: null, hover: null, cmp: null });
     REQ.det++; REQ.trace++;
     window.scrollTo(0, 0);
-    renderSide(); renderTargets(); loadTargets();
+    renderSide();
+    if (page === "targets") { renderTargets(); loadTargets(); } else { SI.edit = null; renderSites(); loadSites(); }
     $("#view h1")?.focus({ preventScroll: true });
     return;
   }
@@ -769,7 +798,7 @@ function srcSeg() {
   const srcs = S.b?.sources || [];
   return srcs.length < 2 ? "" : `<span class="seg" role="group" aria-label="${t("seenFrom")}"><button data-src="${ALL}" aria-pressed="${S.src === ALL}" title="${t("seenFrom")} ${t("allSitesT")}">${t("allSites")}</button>${srcs.map(s => {
     const late = !s.last_ts || S.b.now - s.last_ts > 3 * S.b.step;
-    const where = [s.as_name, s.asn, s.cc].filter(Boolean).join(" · ");     // its provider, from its own traceroutes
+    const where = [s.place, s.network, s.asn, s.ip].filter(Boolean).join(" · ");     // see the Sites page
     return `<button data-src="${esc(s.name)}" aria-pressed="${s.name === S.src}" title="${t("seenFrom")} ${esc(s.name)}${where ? ": " + esc(where) : ""}">${late ? icon("stale") : ""}${esc(s.name)}${s.cc ? `<span class="cc">${esc(s.cc)}</span>` : ""}</button>`;
   }).join("")}</span>`;
 }
@@ -819,7 +848,8 @@ function renderSide() {
       ${kids.length && open ? `<div class="kids">${kids.map(nodeHtml).join("")}</div>` : ""}</div>`;
   };
   el.innerHTML = `<button class="node" data-g="" aria-current="${!S.tpage && cur === "" && !S.f.ids.size}"><span class="chev" style="visibility:hidden"></span><span class="nm">${t("overview")}</span>${ct(list)}</button>
-    <a class="node" href="#/targets" aria-current="${!!S.tpage}"><span class="chev" style="visibility:hidden"></span><span class="nm">${t("targetsNav")}</span><span class="ct"></span></a>
+    <a class="node" href="#/targets" aria-current="${S.tpage === "targets"}"><span class="chev" style="visibility:hidden"></span><span class="nm">${t("targetsNav")}</span><span class="ct"></span></a>
+    <a class="node" href="#/sites" aria-current="${S.tpage === "sites"}"><span class="chev" style="visibility:hidden"></span><span class="nm">${t("sitesNav")}</span><span class="ct">${S.b.sources.length}</span></a>
     <div class="side-label">${t("groups")}</div>${[...root.kids.values()].sort(byWorst).map(nodeHtml).join("")}`;
 }
 
@@ -840,7 +870,7 @@ async function postJSON(path, body) {
 }
 function renderTargets() {
   const v = $("#view");
-  if (!S.tpage) return;
+  if (S.tpage !== "targets") return;
   v.dataset.page = "targets";
   const d = TG.data;
   const head = lede => `<div class="page-head"><div><h1 tabindex="-1">${t("targetsNav")}</h1><p class="lede">${lede}</p></div>
@@ -909,7 +939,7 @@ async function editTarget(id, group = "") {
   const x = id ? TG.data.targets.find(y => y.id === id) : { group, name: "", address: "", master: true, slaves: null };
   if (!x || !TG.data.editable) return;
   TG.edit = { ...x }; TG.saved = "";
-  if (S.tpage) { renderTargets(); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+  if (S.tpage === "targets") { renderTargets(); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
   const dlg = $("#tdlg");
   dlg.innerHTML = targetForm(TG.data);
   if (!dlg.open) dlg.showModal();
@@ -950,6 +980,70 @@ function showFieldError(field, msg) {
   const slot = field && $(`#tform .ferr[data-for="${field}"]`);
   if (slot) { slot.textContent = msg; $(`#tform [name="${field}"]`)?.setAttribute("aria-invalid", "true"); $(`#tform [name="${field}"]`)?.focus(); }
   else $("#tformErr").textContent = msg;
+}
+
+// ---------- sites: where each vantage point is ----------
+const SI = { data: null, err: null, edit: null, saved: "", busy: false };     // edit: a site's name
+async function loadSites() {
+  const tok = ++REQ.si;
+  try { const d = await api("/api/sites"); if (tok !== REQ.si) return; SI.data = d; SI.err = null; }
+  catch (e) { if (tok !== REQ.si) return; SI.err = e.message; }
+  renderSites();
+}
+function renderSites() {
+  const v = $("#view");
+  if (S.tpage !== "sites") return;
+  v.dataset.page = "sites";
+  const d = SI.data;
+  const head = lede => `<div class="page-head"><div><h1 tabindex="-1">${t("sitesNav")}</h1><p class="lede">${lede}</p></div></div>`;
+  if (!d) { v.innerHTML = head(SI.err ? `${esc(SI.err)} <button class="link" data-act="sreload">${t("retry")}</button>` : '<span class="sk w3"></span>'); return; }
+  const lede = [d.asn ? t("sLede") : t("sLedeOff"), d.why === "password" ? t("sWhyPassword") : d.why === "demo" ? t("sWhyDemo") : ""].filter(Boolean).join(" ");
+  const dim = s => `<span class="dim">${s}</span>`;
+  const kind = s => s.kind === "local" ? t("sLocal") : s.kind === "pull" ? t("sPull") : t("sPush");
+  const last = s => !s.last_ts ? dim("—") : `${d.now - s.last_ts > 3 * d.step ? icon("stale") + " " : ""}${ago(d.now - s.last_ts)}`;
+  const net = s => s.network ? `${esc(s.network)}${s.asn ? ` <span class="dim mono">${esc(s.asn)}</span>` : ""}` : dim("—");
+  const rows = d.sites.map(s => `<tr${SI.edit === s.name ? ' aria-current="true"' : ""}><td><span class="nm">${esc(s.name)}</span><div class="sub">${esc(kind(s))}</div></td>
+      <td class="${s.ip ? "mono" : ""}">${s.ip ? esc(s.ip) : `<span class="dim" title="${t("sNoIp")}">${t("sNone")}</span>`}${s.prefix ? `<div class="sub">${esc(s.prefix)}</div>` : ""}</td>
+      <td>${net(s)}</td><td class="mono">${s.cc ? esc(s.cc) : dim("—")}</td>
+      <td>${s.place ? esc(s.place) : dim("—")}${s.note ? `<div class="sub">${esc(s.note)}</div>` : ""}</td>
+      <td class="hide-s muted">${last(s)}</td><td class="hide-s num">${s.targets}</td>
+      <td class="act">${d.editable ? `<button class="link" data-sedit="${esc(s.name)}">${t("tEdit")}</button>` : ""}</td></tr>`).join("");
+  v.innerHTML = head(lede) + (SI.edit ? siteForm(d.sites.find(s => s.name === SI.edit)) : "")
+    + `<div class="ttools"><span class="count">${t("sCount", d.sites.length)}</span><span class="grow"></span>${SI.saved ? `<span class="count">${esc(SI.saved)}</span>` : ""}</div>
+    <div class="tw"><table class="tlist slist"><thead><tr><th>${t("sSite")}</th><th>${t("sIp")}</th><th>${t("sNet")}</th><th>${t("sCountry")}</th>
+      <th>${t("sPlace")}</th><th class="hide-s">${t("sLast")}</th><th class="hide-s num">${t("sTargets")}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  if (SI.edit) $("#sform [name=place]")?.focus();
+}
+function siteForm(s) {
+  const fld = (name, label, val, attrs = "", help = "", wide = false) => `<label class="fld ${wide ? "wide" : ""}"><span>${label}</span>
+    <input name="${name}" value="${esc(val ?? "")}" ${attrs}>${help ? `<small>${help}</small>` : ""}<small class="ferr" data-for="${name}"></small></label>`;
+  return `<form class="tform" id="sform" novalidate>
+    <h2>${t("sEditTitle", esc(s.name))}</h2>
+    <div class="fgrid">
+      ${fld("place", t("sPlace"), s.place, 'maxlength="60" autocomplete="off"', t("sPlaceHelp"))}
+      ${fld("country", t("sCountry"), s.country, `class="mono" maxlength="2" autocomplete="off" spellcheck="false" placeholder="${esc(s.found_cc || "")}"`, t("sCountryHelp", esc(s.found_cc || "")))}
+      ${fld("provider", t("sProvider"), s.provider, `maxlength="60" autocomplete="off" placeholder="${esc(s.as_name || "")}"`, t("sProviderHelp", esc(s.as_name || "")))}
+      ${fld("note", t("sNote"), s.note, 'maxlength="200" autocomplete="off"', t("sNoteHelp"))}
+    </div>
+    <p class="hint ferr-all" id="sformErr" role="alert"></p>
+    <div class="factions"><button class="btn primary" type="submit" ${SI.busy ? "disabled" : ""}>${t("tSave")}</button>
+      <button class="btn" type="button" data-act="scancel">${t("tCancel")}</button></div>
+  </form>`;
+}
+async function saveSite() {
+  const f = $("#sform"), val = n => f.elements[n].value.trim(), name = SI.edit;
+  SI.busy = true;
+  try {
+    SI.data = await postJSON("/api/sites", { name, place: val("place"), country: val("country"), provider: val("provider"), note: val("note") });
+    SI.edit = null; SI.saved = t("sSaved", name);
+    renderSites(); loadBoard();
+  } catch (e) {
+    if (e.message === "sign in") return;
+    document.querySelectorAll("#sform .ferr").forEach(el => { el.textContent = ""; });
+    const slot = e.field && $(`#sform .ferr[data-for="${e.field}"]`);
+    if (slot) { slot.textContent = e.message; f.elements[e.field].setAttribute("aria-invalid", "true"); f.elements[e.field].focus(); }
+    else $("#sformErr").textContent = e.message;
+  } finally { SI.busy = false; }
 }
 
 // ---------- filtering ----------
@@ -1675,7 +1769,10 @@ function renderTrace() {
     <span class="seg" role="group" aria-label="${t("compareAria")}"><button data-vs="route" aria-pressed="${S.vs === "route"}">${t("vsRoute")}</button><button data-vs="round" aria-pressed="${S.vs === "round"}">${t("vsRound")}</button></span></div>`;
   if (!tr) { el.innerHTML = head + `<div class="empty">${t("loading")}</div>`; return; }
   if (tr.error) { el.innerHTML = head + empty(t("traceErr"), `<button class="btn" data-act="retrace">${t("tryAgain")}</button>`); return; }
-  const net = name => { const x = (S.b?.sources || []).find(y => y.name === name); return x?.as_name ? ` <span class="dim">· ${esc(x.as_name)}${x.cc ? ", " + esc(x.cc) : ""}</span>` : ""; };
+  const net = name => {
+    const x = (S.b?.sources || []).find(y => y.name === name), w = [x?.place, x?.network, x?.cc].filter(Boolean).join(", ");
+    return w ? ` <span class="dim">· ${esc(w)}</span>` : "";
+  };
   const site = name => more.length ? `<h3 class="tsite">${t("seenFrom")} <b>${esc(name)}</b>${net(name)}</h3>` : "";
   el.innerHTML = head + site(S.det?.source || "") + traceBlock(tr, true)
     + more.map(x => site(x.name) + traceBlock(x.tr, false)).join("") + `<p class="foot">${t("foot")}</p>`;
@@ -1786,7 +1883,7 @@ function renderRaw() {
 // the button shows the choice at once; the data follows when it arrives
 const pressOnly = (k, v) => document.querySelectorAll(`[data-${k}]`).forEach(b => b.setAttribute("aria-pressed", String(b.dataset[k]) === String(v)));
 document.addEventListener("click", e => {
-  const b = e.target.closest("[data-tedit],[data-tog],[data-act],[data-src],[data-brange],[data-drange],[data-view],[data-mode],[data-tl],[data-vs],[data-fst],[data-fp],[data-frc],[data-st],[data-rc],[data-g],[data-sortk],[data-ids],[data-here],[data-open]");
+  const b = e.target.closest("[data-tedit],[data-sedit],[data-tog],[data-act],[data-src],[data-brange],[data-drange],[data-view],[data-mode],[data-tl],[data-vs],[data-fst],[data-fp],[data-frc],[data-st],[data-rc],[data-g],[data-sortk],[data-ids],[data-here],[data-open]");
   if (!b) { if (document.body.classList.contains("drawer") && !e.target.closest(".side")) document.body.classList.remove("drawer"); return; }
   const ds = b.dataset;
   if (ds.tog != null) { S.open.has(ds.tog) ? S.open.delete(ds.tog) : S.open.add(ds.tog); store.set("treeOpen", JSON.stringify([...S.open])); renderSide(); return; }
@@ -1799,6 +1896,9 @@ document.addEventListener("click", e => {
   if (ds.act === "treload") { loadTargets(); return; }
   if (ds.act === "tdel") { if (confirm(t("tConfirm", TG.edit.name))) saveTarget("delete"); return; }
   if (ds.tedit) { editTarget(ds.tedit); return; }
+  if (ds.sedit) { SI.edit = ds.sedit; SI.saved = ""; renderSites(); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+  if (ds.act === "scancel") { SI.edit = null; renderSites(); return; }
+  if (ds.act === "sreload") { loadSites(); return; }
   if (ds.act === "clearq") { $("#q").value = ""; setFilters(f => { f.q = ""; }); return; }
   if (ds.act === "clearids") { setFilters(f => { f.ids.clear(); }); return; }
   if (ds.act === "clear") { $("#q").value = ""; setFilters(f => { f.st.clear(); f.p.clear(); f.ids.clear(); f.rc = false; f.q = ""; }); return; }
@@ -1826,7 +1926,10 @@ document.addEventListener("click", e => {
   if (ds.here) { pickMoment(+ds.at); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
   if (ds.open) { openTarget(ds.open, ds.at ? +ds.at : null); return; }
 });
-document.addEventListener("submit", e => { if (e.target.id === "tform") { e.preventDefault(); saveTarget("save"); } });
+document.addEventListener("submit", e => {
+  if (e.target.id === "tform") { e.preventDefault(); saveTarget("save"); }
+  if (e.target.id === "sform") { e.preventDefault(); saveSite(); }
+});
 document.addEventListener("input", e => {
   if (e.target.id !== "tq") return;
   TG.q = e.target.value;

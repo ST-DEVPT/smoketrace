@@ -17,6 +17,8 @@ from pathlib import Path
 
 import smoketrace as st
 
+st.MY_IP.update(at=float("inf"))     # no public address lookups: these checks stay on loopback
+
 TOKEN = "0123456789abcdef"
 
 
@@ -724,6 +726,90 @@ def test_version_matches_the_changelog():
     assert top.startswith(f"## [{st.VERSION}]"), (top, st.VERSION)
 
 
+def test_where_a_site_is():
+    assert [st.site_ip(v) for v in ("9.9.9.9", "10.0.0.1", "127.0.0.1", "2a00:1450::1", "nope", None)] ==         ["9.9.9.9", None, None, "2a00:1450::1", None, None]
+    saved = st.dns_txt
+    try:
+        asked = []
+        st.dns_txt = lambda name, server: asked.append(name) or ["3243 | 85.240.0.0/13 | PT | ripencc | 2003-11-19"]
+        assert st.origin("85.241.2.3") == ("AS3243", "85.240.0.0/13", "PT") and asked == ["3.2.241.85.origin.asn.cymru.com"]
+        st.dns_txt = lambda name, server: []
+        assert st.origin("2a00:1450::1") == ("", None, None)          # announced by nobody
+        st.dns_txt = lambda name, server: asked.append(server) or ["85.241.2.3"]
+        st.MY_IP.update(at=0, ip=None)
+        assert st.my_ip(now=10_000) == "85.241.2.3" and asked[-1] == st.MYIP[0]
+        st.dns_txt = lambda name, server: 1 / 0
+        assert st.my_ip(now=10_100) == "85.241.2.3"                   # asked once an hour, not every round
+        st.ASN_LOOKUP = False
+        st.MY_IP.update(at=0, ip=None)
+        assert st.my_ip(now=20_000) is None                           # ASN=0: nothing is asked of anyone
+    finally:
+        st.dns_txt, st.ASN_LOOKUP = saved, True
+        st.MY_IP.update(at=float("inf"), ip=None)
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d, "s.db")
+        st.init_db(db, "local")
+        st.note_site(db, "porto", "85.241.2.3")
+        with st.db_open(db) as c:
+            c.execute("UPDATE site SET asn='AS3243', prefix='85.240.0.0/13', cc='PT'")
+            c.execute("INSERT INTO asn VALUES ('AS3243', 'MEO-RESIDENCIAL - MEO, PT', 0)")
+        st.note_site(db, "porto", "85.241.2.3")                       # the same address: what was found stays
+        with st.db_open(db) as c:
+            got = st.site_info(c, ["local", "porto"])
+        assert got["local"]["ip"] is None and got["local"]["network"] is None
+        assert (got["porto"]["network"], got["porto"]["cc"], got["porto"]["asn"]) == ("MEO", "PT", "AS3243")
+        st.edit_site(db, ["local", "porto"], {"name": "porto", "place": " Porto,  Boavista ", "country": "es",
+                                              "provider": "", "note": None})
+        with st.db_open(db) as c:
+            got = st.site_info(c, ["porto"])["porto"]
+        assert (got["place"], got["cc"], got["found_cc"], got["network"]) == ("Porto, Boavista", "ES", "PT", "MEO")
+        for bad, field in (({"name": "nowhere"}, "name"), ({"name": "porto", "country": "Spain"}, "country"),
+                           ({"name": "porto", "place": "x" * 61}, "place"), ({"name": "porto", "note": 5}, "note")):
+            try:
+                st.edit_site(db, ["porto"], bad)
+                raise AssertionError(bad)
+            except ValueError as e:
+                assert str(e).startswith(field + ":"), e
+        st.note_site(db, "porto", "193.136.1.1")                      # it moved: looked up again
+        with st.db_open(db) as c:
+            assert c.execute("SELECT ip, asn, place FROM site WHERE name='porto'").fetchone() == ("193.136.1.1", None, "Porto, Boavista")
+
+
+def test_sites_over_http():
+    with tempfile.TemporaryDirectory() as d:
+        db, srv, url = server_with(d)
+        saved = st.CONFIG["source"]
+        try:
+            now = int(time.time())
+            call(url + "/api/agent/push", {"ts": now, "pings": {"t": [5.0] * 20}, "traces": {}, "ip": "85.241.2.3"})
+            call(url + "/api/agent/push", {"ts": now, "pings": {"u": [5.0] * 20}, "traces": {}}, token="office-" + TOKEN)
+            got = {s["name"]: s for s in call(url + "/api/sites")["sites"]}
+            assert [got[n]["kind"] for n in ("local", "porto", "office")] == ["local", "push", "push"]
+            assert got["porto"]["ip"] == "85.241.2.3" and got["office"]["ip"] is None    # 127.0.0.1 is not public
+            assert got["porto"]["targets"] == 1 and got["office"]["targets"] == 2 and "token" not in got["porto"]
+            st.CONFIG["source"], st.PASSWORD = "ini", None
+            expect_http(403, lambda: call(url + "/api/sites", {"name": "porto", "place": "Porto"}))   # no password
+            st.PASSWORD = "correct horse"
+            cookie = "smoketrace=" + st.session_value(int(time.time()) + 3600)
+
+            def post(body, ctype="application/json"):
+                req = urllib.request.Request(url + "/api/sites", data=json.dumps(body).encode(),
+                                             headers={"Cookie": cookie, "Content-Type": ctype})
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return json.load(r)
+            expect_http(403, lambda: post({"name": "porto", "place": "Porto"}, "text/plain"))
+            out = post({"name": "porto", "place": "Porto", "country": "pt"})
+            assert {s["name"]: s for s in out["sites"]}["porto"]["place"] == "Porto"
+            assert json.loads(expect_http(400, lambda: post({"name": "porto", "country": "xyz"})).read())["field"] == "country"
+            board = call(url + "/api/board?range=86400&src=porto", cookie=cookie)
+            assert {s["name"]: s for s in board["sources"]}["porto"]["place"] == "Porto"
+        finally:
+            st.CONFIG["source"], st.PASSWORD = saved, None
+            st.BOARD_CACHE.clear()
+            srv.shutdown()
+            srv.server_close()
+
+
 def test_a_stale_board_is_served_while_a_new_one_is_made():
     with tempfile.TemporaryDirectory() as d:
         db, srv, url = server_with(d)
@@ -731,7 +817,7 @@ def test_a_stale_board_is_served_while_a_new_one_is_made():
             st.BOARD_CACHE.clear()
             st.BOARD_CACHE[("local", 86400)] = (0, None, {"old": True}, b'{"old":true}')    # long out of date
             t0 = time.time()
-            assert call(url + "/api/board?range=86400&src=local") == {"old": True}     # no wait for the new one
+            assert call(url + "/api/board?range=86400&src=local") == {"refreshing": True, "old": True}   # no wait
             assert time.time() - t0 < 1
             for _ in range(100):                                             # made behind it
                 if not st.BOARD_CACHE[("local", 86400)][2].get("old"):
@@ -753,7 +839,7 @@ def test_only_watched_boards_are_kept_warm():
         st.BOARD_CACHE[("all", 604800)] = (0, None, {}, b"{}")
         st.warm_boards(now=1000.0 + st.WATCH_FOR + 60)
         assert started == [("local", 86400)]                        # watched a minute ago: rebuilt
-        assert ("all", 604800) not in st.WATCHED and ("all", 604800) not in st.BOARD_CACHE   # idle: dropped
+        assert ("all", 604800) not in st.WATCHED and ("all", 604800) in st.BOARD_CACHE   # idle: kept, not rebuilt
     finally:
         st.refresh_board = saved
         st.WATCHED.clear()
@@ -856,17 +942,23 @@ def test_pull_round_trip():
             st.pull_agent(db, "office", agent)                 # the agent learns its targets ("t" and "u")
             now = int(time.time()) // 300 * 300
             ticks[0](now)                                      # one round on the agent
+            st.MY_IP["ip"] = "9.9.9.9"                          # as if the agent had asked where it is
+            ticks[0](now + 300)
             st.pull_agent(db, "office", agent)                 # the server takes it and acknowledges it
             with st.db_open(db) as c:
                 rows = c.execute("SELECT source, target, ts, median FROM ping ORDER BY target").fetchall()
-            assert rows == [("office", "t", now, 7.0), ("office", "u", now, 7.0)], rows
-            assert st.PULL_ACK["office"] == now
+            assert rows == [("office", "t", now, 7.0), ("office", "t", now + 300, 7.0), ("office", "u", now, 7.0),
+                            ("office", "u", now + 300, 7.0)], rows
+            assert st.PULL_ACK["office"] == now + 300
+            with st.db_open(db) as c:
+                assert st.site_info(c, ["office"])["office"]["ip"] == "9.9.9.9"
             st.pull_agent(db, "office", agent)                 # acknowledged: nothing comes twice
             with st.db_open(db) as c:
-                assert c.execute("SELECT COUNT(*) FROM ping").fetchone()[0] == 2
+                assert c.execute("SELECT COUNT(*) FROM ping").fetchone()[0] == 4
         finally:
             st.every_round = orig
             st.PULL_ACK.clear()
+            st.MY_IP["ip"] = None
 
 
 # ---------- alerts ----------

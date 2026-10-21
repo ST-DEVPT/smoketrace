@@ -172,6 +172,18 @@ with sync_playwright() as p:
     check("the heatmap's colour buttons still answer", r == ["latency", ["latency"]], r)
     pg.click("[data-mode=status]")
 
+    # 13. the sites page: where each site is, then back to the overview from the sidebar
+    pg.goto(URL + "/#/sites")
+    pg.wait_for_selector("table.slist tbody tr")
+    r = pg.evaluate("""[S.tpage, document.querySelectorAll('table.slist tbody tr').length,
+        document.querySelector('.side a[href="#/sites"]').getAttribute('aria-current'),
+        document.querySelector('table.slist tbody').innerText.includes('Lisbon, office'),
+        S.b.sources[0].place]""")
+    check("the sites page lists both demo sites, where they are", r == ["sites", 2, "true", True, "Lisbon, office"], r)
+    pg.click(".side [data-g='']")
+    pg.wait_for_function("!S.tpage && document.querySelector('#hm')")
+    check("the overview comes back from the sites page", pg.evaluate("[S.tpage, S.view]") == [False, "heat"])
+
     # 12. every site at once by default; one site when picked; a target shows its worst site and all of them
     pg.evaluate("localStorage.removeItem('src')")
     pg.goto(URL + "/#/")

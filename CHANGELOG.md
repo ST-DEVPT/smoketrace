@@ -2,6 +2,25 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.13.0] - 2026-10-21
+
+- **Sites page**: every site (this server and its agents) with its public address, the network and country that
+  address is announced from, its last round and how many targets it probes. Type a place, a country, a provider
+  or a note where what was found is wrong; what you type wins, everywhere the site is named. Editing needs
+  `PASSWORD`, like the targets.
+- **Where a site is, measured, not guessed.** 0.12 took a site's provider from the first hop of its traceroutes
+  with an AS number, which is often the upstream, and its country from that AS's name, which is where the AS is
+  registered. Each site now asks for its own public address once an hour (one DNS question to Google's name
+  servers) and sends it with its rounds; the network, prefix and country come from Team Cymru's origin lookup of
+  that address. A 0.12 agent sends no address: its push's own address is used when it is public. `ASN=0` turns
+  the lookups off.
+- **Charts no longer wait after a quiet spell.** A board nobody had looked at for 10 minutes was thrown away, so
+  the next visitor waited for a new one (seconds for a week of 555 targets). It is now kept and shown at once, a
+  fresh one is made behind it, and the page fetches that a few seconds later. The overview's first board is made
+  when the server starts, and each board is compressed once for every viewer instead of once per request.
+- **OK cells in the heatmap are a muted green** (and so are the OK stretches of the table's history strips), so
+  a working target reads as working at a glance.
+
 ## [0.12.0] - 2026-10-21
 
 - **Fixed: the heatmap's buttons stopped working.** A click on empty space in the page (between the controls, on the

@@ -52,7 +52,8 @@ traceroute for you.
   outage; loss that starts at a hop and lasts to the end is real, and is marked where it starts. Every hop shows
   its network (AS and operator).
 - **Several sites**: agents at other places probe the same targets, so you can tell "the target is down" from
-  "the path from here is broken".
+  "the path from here is broken". The **Sites** page shows where each one is: its public address, the network
+  and country that address is announced from, and the place you type in.
 - **Alerts** on Discord, ntfy or any webhook that say why: the hop where loss starts, the route that changed,
   what the other sites see. **Prometheus** metrics and a Grafana dashboard.
 - **Edit targets on the page**, or keep a text file, or point it at SmokePing's config as it is and import
@@ -185,6 +186,12 @@ After its first round, *porto* appears under **Seen from** at the top of the pag
 every site at once: each target takes the status of the site where it is worst, with that site's figures, and its
 page draws every site on the chart. Pick a site to see the targets from there only.
 
+The **Sites** page lists every site with its public address, its network (AS) and its country. Each site finds
+its own address once an hour with one DNS question to Google's name servers (`o-o.myaddr.l.google.com`), and the
+network and country come from Team Cymru, like the operators on the hops. Where that is wrong (a VPN, a VPS
+registered elsewhere), type the place, the country or the provider on the page: what you type wins. Agents older
+than 0.13 send no address; the server then uses the one their push comes from, when it is a public one.
+
 `AGENTS` goes on the **server** (its list of sites); `TOKEN` and `SERVER` go on the **agent**. If the agent cannot
 reach the server but the server can reach the agent, turn it around: on the agent replace `SERVER` with
 `LISTEN: 0.0.0.0:8100`, open port 8100 to the server only, and on the server write
@@ -268,7 +275,7 @@ Everything is an environment variable in `docker-compose.yml` (or a flag without
 | `STEP` | `300` | Seconds between two rounds of pings (`180`, `3m`), 60 to 3600. Wins over SmokePing's `step`. Agents follow the server. |
 | `TRACE_STEP` | every round | Seconds between two traceroutes of a target (`900`, `15m`), rounded to whole rounds. A target that starts losing pings is traced the next round anyway. Agents follow the server. |
 | `TRACE_PARALLEL` | `16` | Traceroutes at once, 1 to 64. Fewer use less CPU; more trace every target more often. |
-| `ASN` | `1` | `0`: no AS numbers and operator names on hops. |
+| `ASN` | `1` | `0`: no AS numbers and operator names on hops, and no public address lookups for the Sites page. |
 
 **Agent** (in `docker-compose.agent.yml`)
 
