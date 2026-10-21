@@ -180,6 +180,9 @@ with sync_playwright() as p:
         document.querySelector('table.slist tbody').innerText.includes('Lisbon, office'),
         S.b.sources[0].place]""")
     check("the sites page lists both demo sites, where they are", r == ["sites", 2, "true", True, "Lisbon, office"], r)
+    pg.reload()
+    pg.wait_for_selector("table.slist tbody tr")
+    check("a reload stays on the sites page", pg.evaluate("[S.tpage, location.hash]") == ["sites", "#/sites"])
     pg.click(".side [data-g='']")
     pg.wait_for_function("!S.tpage && document.querySelector('#hm')")
     check("the overview comes back from the sites page", pg.evaluate("[S.tpage, S.view]") == [False, "heat"])

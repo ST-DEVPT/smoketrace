@@ -19,7 +19,7 @@
   --ink: #ebe9e4; --ink-2: #aaa79f; --ink-3: #8f8c84;
   --brand: #ff6a33; --accent: #6eb0cf; --accent-soft: rgba(110, 176, 207, .09); --on-bad: #111110;
   --ok: #7fbf6a; --warn: #e2b341; --crit: #f08a3c; --down: #f0524a; --stale: #6b6860;
-  --cell-ok: #344a2f; --cell-none: #3a3834; --lat-0: #2c2b28; --sel: rgba(110, 176, 207, .3); --lat-1: #e2b341; --lat-2: #f0524a;
+  --cell-ok: #24361f; --cell-none: #3a3834; --lat-0: #2c2b28; --sel: rgba(110, 176, 207, .3); --lat-1: #e2b341; --lat-2: #f0524a;
   --route-1: #6eb0cf; --route-2: #b69ae0; --route-3: #5fbf9f; --route-x: #8f8c84;
   --src-2: #e48fb4; --src-3: #d8c06a;
   --smoke: 235, 233, 228; --grid: #222120; --axis: #3a3834; --shadow: 0 6px 20px rgba(0, 0, 0, .35);
@@ -700,7 +700,7 @@ async function loadBoard() {
     if (tok !== REQ.board) return;
     S.b = b; S.src = b.source; S.bAt = Date.now(); setOffline(false);
     S.rf = b.refreshing ? (S.rf || 0) + 1 : 0;          // a newer one is being made: asked for again soon
-    if (b.refreshing && S.rf <= 10) setTimeout(() => { if (tok === REQ.board) refresh(); }, 3000);
+    if (b.refreshing && S.rf <= 10) setTimeout(() => { if (tok === REQ.board) loadBoard(); }, 3000);
   } catch (e) {
     if (tok !== REQ.board) return;
     if (e.message !== "sign in") setOffline(true);

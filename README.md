@@ -130,8 +130,8 @@ corner of the page.
 then open `http://localhost:8099`.
 
 > [!WARNING]
-> Without `PASSWORD`, anyone who reaches port 8099 sees your targets and the routes to them, and the Targets page
-> stays read-only. Set a password, and put the page behind HTTPS if it is reachable from the internet
+> Without `PASSWORD`, anyone who reaches port 8099 sees your targets, the routes to them and every site's public
+> address, and the Targets and Sites pages stay read-only. Set a password, and put the page behind HTTPS if it is reachable from the internet
 > ([below](#behind-https)). See [SECURITY.md](SECURITY.md).
 
 ## Add targets
