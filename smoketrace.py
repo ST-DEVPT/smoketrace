@@ -37,6 +37,7 @@ import sys
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.request
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -47,7 +48,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.13.0"           # the top of CHANGELOG.md says the same; a test checks
+VERSION = "0.13.1"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
@@ -981,38 +982,55 @@ def _int(v, lo, hi):
     return v
 
 
+def clean_hops(hops):
+    """One target's traceroute from an agent, rebuilt from known fields; ValueError when any of it is wrong."""
+    if not isinstance(hops, list) or len(hops) > 64:
+        raise ValueError("not a list of up to 64 hops")
+    out = []
+    for h in hops:
+        ip = h.get("ip") if isinstance(h, dict) else ""
+        asn = h.get("asn")
+        if ip is not None and not (isinstance(ip, str) and IP_RE.fullmatch(ip)):
+            raise ValueError("bad hop address")
+        if asn is not None and not (isinstance(asn, str) and ASN_RE.fullmatch(asn)):
+            raise ValueError("bad AS")
+        out.append({"ttl": _int(h.get("ttl"), 1, 64), "ip": ip, "asn": asn, "loss": _num(h.get("loss"), 0, 100, True),
+                    **{k: _num(h.get(k), 0, 60000) for k in ("avg", "best", "wrst", "sd")}})
+    return out
+
+
 def clean_round(p, ids, now):
-    """Validate an agent's round and rebuild it from known fields only. -> (ts, pings or None, traces)."""
+    """Validate an agent's round and rebuild it from known fields only. -> (ts, pings or None, traces, dropped).
+    Only a round that is wrong as a whole is refused (ValueError). A target the agent is no longer given (edited
+    out between its fetch and its push) or one target's bad figures drop that part alone, named in `dropped`:
+    one refused round used to stop an agent's every round after it."""
     if not isinstance(p, dict):
         raise ValueError("round must be an object")
     ts = _int(p.get("ts"), now - RETENTION_DAYS * 86400 + 1, now + STEP) // STEP * STEP
-    pings = None
-    if p.get("pings") is not None:
-        if not isinstance(p["pings"], dict):
-            raise ValueError("pings must be an object")
-        pings = {}
-        for tid, rtts in p["pings"].items():
-            if tid not in ids or not isinstance(rtts, list) or not 0 < len(rtts) <= 100:
-                raise ValueError(f"bad pings for {tid!r}")
-            pings[tid] = [_num(v, 0, 60000) for v in rtts]
-    traces = {}
+    if not isinstance(p.get("pings") if p.get("pings") is not None else {}, dict):
+        raise ValueError("pings must be an object")
     if not isinstance(p.get("traces") or {}, dict):
         raise ValueError("traces must be an object")
+    dropped, pings, traces = [], None, {}
+    if p.get("pings") is not None:
+        pings = {}
+        for tid, rtts in p["pings"].items():
+            try:
+                if tid not in ids:
+                    raise ValueError("not probed by this agent")
+                if not isinstance(rtts, list) or not 0 < len(rtts) <= 100:
+                    raise ValueError("not a list of 1 to 100 replies")
+                pings[tid] = [_num(v, 0, 60000) for v in rtts]
+            except ValueError as e:
+                dropped.append(f"pings for {str(tid)[:64]!r}: {e}")
     for tid, hops in (p.get("traces") or {}).items():
-        if tid not in ids or not isinstance(hops, list) or len(hops) > 64:
-            raise ValueError(f"bad trace for {tid!r}")
-        out = []
-        for h in hops:
-            ip = h.get("ip") if isinstance(h, dict) else ""
-            asn = h.get("asn")
-            if ip is not None and not (isinstance(ip, str) and IP_RE.fullmatch(ip)):
-                raise ValueError(f"bad hop in {tid!r}")
-            if asn is not None and not (isinstance(asn, str) and ASN_RE.fullmatch(asn)):
-                raise ValueError(f"bad AS in {tid!r}")
-            out.append({"ttl": _int(h.get("ttl"), 1, 64), "ip": ip, "asn": asn, "loss": _num(h.get("loss"), 0, 100, True),
-                        **{k: _num(h.get(k), 0, 60000) for k in ("avg", "best", "wrst", "sd")}})
-        traces[tid] = out
-    return ts, pings, traces
+        try:
+            if tid not in ids:
+                raise ValueError("not probed by this agent")
+            traces[tid] = clean_hops(hops)
+        except (ValueError, AttributeError) as e:
+            dropped.append(f"trace for {str(tid)[:64]!r}: {e}")
+    return ts, pings, traces, dropped
 
 
 def agent_view(t):
@@ -1238,6 +1256,13 @@ def run_agent(server, token, ping_fn, trace_fn):
         while backlog:
             try:
                 call("/api/agent/push", backlog[0])
+            except urllib.error.HTTPError as e:
+                why = e.read()[:300].decode("utf-8", "replace")
+                if e.code not in (400, 413):     # a wrong token or a server in trouble: keep it for later
+                    log(f"push to {server} failed, {len(backlog)} round(s) kept: {e} {why}")
+                    break
+                # refused for what it holds: sending it again cannot help, and it must not hold up the rest
+                log(f"push to {server}: the round of {backlog[0]['ts']} was refused and is dropped: {e} {why}")
             except Exception as e:
                 log(f"push to {server} failed, {len(backlog)} round(s) kept: {e}")
                 break
@@ -1323,8 +1348,10 @@ def pull_agent(path, name, agent):
         now, ids = int(time.time()), {t["id"] for t in mine}
         for r in rounds if isinstance(rounds, list) else []:
             try:
-                ts, pings, traces = clean_round(r, ids, now)
+                ts, pings, traces, dropped = clean_round(r, ids, now)
                 store(path, *round_rows(name, ts, pings, traces), now)
+                if dropped:
+                    log(f"from {name}'s round {ts}, left out: {'; '.join(dropped[:5])}")
             except (ValueError, KeyError, TypeError, AttributeError) as e:
                 log(f"rejected a round from {name}: {e}")
             if isinstance(r, dict) and isinstance(r.get("ts"), int):
@@ -2050,11 +2077,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(401, b'{"error":"bad token"}', "application/json")
         now = int(time.time())
         try:
-            ts, pings, traces = clean_round(json.loads(body), {t["id"] for t in targets_for(name)}, now)
+            ts, pings, traces, dropped = clean_round(json.loads(body), {t["id"] for t in targets_for(name)}, now)
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             log(f"rejected a round from {name}: {e}")
-            return self.send(400, b'{"error":"bad round"}', "application/json")
+            return self.send(400, json.dumps({"error": f"bad round: {e}"}).encode(), "application/json")
         store(self.db, *round_rows(name, ts, pings, traces), now)
+        if dropped:
+            log(f"from {name}'s round {ts}, left out: {'; '.join(dropped[:5])}")
         # where it is: what it says (0.13 agents), else the address its push came from, when that is a public one
         fwd = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
         note_site(self.db, name, site_ip(json.loads(body).get("ip")) or site_ip(fwd or self.client_address[0]))

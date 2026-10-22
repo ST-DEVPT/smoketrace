@@ -2,6 +2,17 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.13.1] - 2026-10-22
+
+- **Fixed: one refused round stopped an agent for good.** The agent kept a round the server refused (HTTP 400)
+  at the head of its queue and sent it again before any other, so every round after it piled up behind it
+  ("push failed, 6 round(s) kept: HTTP Error 400"). It now drops a refused round, logs the server's reason, and
+  sends the rest; a wrong token or a server error still keeps the rounds for later.
+- **The server refuses less.** A target the agent is no longer given (removed, or its agent unticked, between
+  the agent's fetch and its push) or one target's bad figures used to refuse the whole round. Now only that
+  target's part is left out and logged; the round is kept. A round that is wrong as a whole (its time, its shape)
+  is still refused, now with the reason in the answer.
+
 ## [0.13.0] - 2026-10-21
 
 - **Sites page**: every site (this server and its agents) with its public address, the network and country that

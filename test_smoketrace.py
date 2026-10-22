@@ -558,21 +558,35 @@ def test_clean_round():
     good = {"ts": now - 7, "pings": {"t": [1.5, None]},
             "traces": {"t": [{"ttl": 1, "ip": "10.0.0.1", "asn": "AS64496", "loss": 0, "avg": 1.2, "extra": "dropped"},
                              {"ttl": 2, "ip": None, "loss": 100}]}}
-    ts, pings, traces = st.clean_round(good, {"t"}, now)
+    ts, pings, traces, dropped = st.clean_round(good, {"t"}, now)
+    assert dropped == []
     assert ts == (now - 7) // st.STEP * st.STEP and pings == {"t": [1.5, None]}
     assert traces["t"][0] == {"ttl": 1, "ip": "10.0.0.1", "asn": "AS64496", "loss": 0.0, "avg": 1.2, "best": None,
                               "wrst": None, "sd": None}
     assert st.clean_round({"ts": now, "pings": None, "traces": {}}, {"t"}, now)[1] is None   # fping failed there
+    # one target's bad part is left out, the rest of the round is kept (a refused round used to block the agent)
+    part = [
+        {"pings": {"unknown": [1.0]}},                                  # target the server does not give that agent
+        {"pings": {"t": [float("nan")]}},
+        {"pings": {"t": ["1"]}},
+        {"pings": {"t": []}},
+        {"traces": {"t": [{"ttl": 1, "ip": "1.1.1.1; rm -rf /", "loss": 0}]}},
+        {"traces": {"t": [{"ttl": 1, "ip": "1.1.1.1", "asn": "<script>", "loss": 0}]}},
+        {"traces": {"t": [{"ttl": 99, "ip": None, "loss": 0}]}},
+        {"traces": {"t": ["x"]}},
+        {"traces": {"unknown": []}},
+    ]
+    for b in part:
+        r = {"ts": now, "pings": {"ok": [2.0], **b.get("pings", {})}, "traces": b.get("traces", {})}
+        ts, pings, traces, dropped = st.clean_round(r, {"t", "ok"}, now)
+        assert pings == {"ok": [2.0]} and traces == {} and len(dropped) == 1, (b, pings, traces, dropped)
+        assert "rm -rf" not in json.dumps([pings, traces]) and "<script>" not in json.dumps([pings, traces])
     bad = [
-        {"ts": now, "pings": {"unknown": [1.0]}},                       # target the server does not give that agent
-        {"ts": now, "pings": {"t": [float("nan")]}},
-        {"ts": now, "pings": {"t": ["1"]}},
         {"ts": True, "pings": {}},
         {"ts": now - 40 * 86400},                                       # older than the retention
-        {"ts": now, "traces": {"t": [{"ttl": 1, "ip": "1.1.1.1; rm -rf /", "loss": 0}]}},
-        {"ts": now, "traces": {"t": [{"ttl": 1, "ip": "1.1.1.1", "asn": "<script>", "loss": 0}]}},
-        {"ts": now, "traces": {"t": [{"ttl": 99, "ip": None, "loss": 0}]}},
-        {"ts": now, "traces": {"t": ["x"]}},
+        {"ts": now + 2 * st.STEP},                                      # from the future
+        {"ts": now, "pings": []},
+        {"ts": now, "traces": "x"},
         [],
     ]
     for b in bad:
@@ -655,7 +669,11 @@ def test_agent_push_end_to_end():
             assert ov["targets"][0]["status"] == "ok" and ov["targets"][0]["by_source"] == {"local": "stale", "porto": "ok", "office": "stale"}
             assert [s["name"] for s in ov["sources"]] == ["local", "porto", "office"] and ov["auth"] is False
             expect_http(401, lambda: call(url + "/api/agent/targets", token="wrong-token-xxxxxx"))
-            expect_http(400, lambda: call(url + "/api/agent/push", {"ts": now, "pings": {"u": [1.0]}}))
+            assert call(url + "/api/agent/push", {"ts": now + 1, "pings": {"u": [1.0], "t": [4.0] * 20}}) == {"ok": True}
+            with st.db_open(db) as c:                                   # porto's "u" is left out, its "t" kept
+                assert c.execute("SELECT target FROM ping WHERE source='porto'").fetchall() == [("t",)]
+            e = expect_http(400, lambda: call(url + "/api/agent/push", {"ts": True, "pings": {}}))
+            assert json.loads(e.read())["error"].startswith("bad round: ")      # the agent logs why
             expect_http(400, lambda: call(url + "/api/overview?src=nowhere"))
         finally:
             srv.shutdown()
@@ -700,6 +718,45 @@ def test_sign_in_and_metrics():
             st.PASSWORD = st.METRICS_TOKEN = None
             srv.shutdown()
             srv.server_close()
+
+
+def test_a_refused_round_does_not_hold_up_the_rest():
+    """The agent drops a round the server refuses (400) and sends the next; on 5xx it keeps them all."""
+    answers, got = [400, 200, 503, 200, 200], []
+
+    class Server(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps({"step": 300, "pings": 20, "targets": [{"id": "t", "host": "10.0.0.9", "probe": "icmp"}]})
+            self.reply(200, body.encode())
+
+        def do_POST(self):
+            got.append(json.loads(self.rfile.read(int(self.headers["Content-Length"])))["ts"])
+            code = answers.pop(0)
+            self.reply(code, b'{"error":"bad round: test"}' if code == 400 else b'{"ok":true}')
+
+        def reply(self, code, body):
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+    srv, url = serve(Server)
+    ticks, saved = [], (st.every_round, st.STEP, st.PINGS, st.TRACE_STEP)
+    st.every_round = lambda fn: ticks.append(fn)
+    try:
+        st.run_agent(url, TOKEN, lambda targets, ts: {t["id"]: [1.0] * 20 for t in targets}, lambda t, ts: [])
+        ticks[0](300)                     # refused: dropped
+        ticks[0](600)                     # sent
+        ticks[0](900)                     # 503: kept
+        ticks[0](1200)                    # 900 then 1200
+        assert got == [300, 600, 900, 900, 1200], got
+    finally:
+        st.every_round, st.STEP, st.PINGS, st.TRACE_STEP = saved
+        srv.shutdown()
+        srv.server_close()
 
 
 def test_agent_with_the_servers_agents_line_instead_of_token():
