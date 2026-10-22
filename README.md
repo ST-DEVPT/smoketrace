@@ -302,6 +302,10 @@ every 15: `STEP: 3m` and `TRACE_STEP: 15m`.
 **The agent stops with "an agent needs its token in TOKEN".** `TOKEN` is missing on the agent. It is the same token
 that follows the site's name in the server's `AGENTS`. `AGENTS` itself belongs on the server, not on the agent.
 
+**The agent logs "push ... failed, N round(s) kept: HTTP Error 400".** Before 0.13.1 one round the server
+refused blocked every round after it. Update the server and the agent; the agent then drops a refused round
+and logs the server's reason, and the server's log says what it left out (`from porto's round ..., left out`).
+
 **The site never shows under "Seen from".** Check the agent's log (`docker logs smoketrace-agent`).
 `HTTP Error 401`: the token on the agent differs from the one in the server's `AGENTS`, or the server was not
 restarted after `AGENTS` changed. `cannot fetch targets` with a connection error: `SERVER` is wrong or blocked;
