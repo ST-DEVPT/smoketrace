@@ -74,7 +74,7 @@ def section(page, locator, path, right=24):
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         server = subprocess.Popen([sys.executable, str(ROOT / "smoketrace.py"), "--demo", "--port", str(PORT),
-                                   "--db", str(Path(tmp, "demo.db"))])
+                                   "--db", str(Path(tmp, "history.db"))])   # the demo keeps demo.db beside it
         try:
             for _ in range(120):
                 try:

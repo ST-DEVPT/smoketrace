@@ -20,8 +20,8 @@ A review of the whole project; what it found:
 - Errors inside a request are answered (500; 503 to an agent's push, which keeps that round and sends it again)
   instead of the connection being dropped; a trace whose row the daily prune already removed reads as empty.
 - **All sites** lines its sites' heatmap cells up: a site's board made a cell earlier is made again.
-- **Sign-in**: wrong passwords go one a second however many are sent at once (the rest are answered 429 at once,
-  without a thread held for each).
+- **Sign-in**: wrong passwords go one a second however many are sent at once, even all at the same moment (the
+  rest are answered 429 at once, without a thread held for each).
 - The image's one package, PyMySQL, is pinned by hash (`requirements.txt`, kept current by Dependabot), and a
   failed install fails the build.
 - Docs: the compose files' pinned-version example and the `ASN=0` notes; SECURITY.md lists the Sites page, the

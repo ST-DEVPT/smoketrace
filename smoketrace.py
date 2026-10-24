@@ -2099,6 +2099,7 @@ FONTS = {"/fonts/archivo.woff2": "archivo.woff2", "/fonts/plex-mono-400.woff2": 
 # ---------- sign-in ----------
 
 LOGIN_FAIL = {"at": 0.0}    # when a wrong password last came in: guesses go one a second, whoever sends them
+LOGIN_LOCK = threading.Lock()
 
 def session_value(expiry):
     sig = hmac.new(PASSWORD.encode(), str(expiry).encode(), hashlib.sha256).hexdigest()
@@ -2246,18 +2247,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(413, b'{"error":"too large"}', "application/json")
         body = self.rfile.read(size)
         if path == "/login" and PASSWORD:
-            if time.time() - LOGIN_FAIL["at"] < 1:      # a wrong password in the last second: no check, no wait
+            given = parse_qs(body.decode("utf-8", "replace")).get("password", [""])[0]
+            with LOGIN_LOCK:    # check and mark at once: a burst of guesses all at the same moment is one guess
+                busy = time.time() - LOGIN_FAIL["at"] < 1     # a wrong password in the last second: no check
+                right = not busy and hmac.compare_digest(given.encode(), PASSWORD.encode())
+                if not busy and not right:
+                    LOGIN_FAIL["at"] = time.time()
+            if busy:
                 page = LOGIN_PAGE.replace("%ERROR%", '<p class="err" role="alert" data-k="busy">Too many tries: '
                                                      'wait a second and try again.</p>')
                 return self.send(429, page.encode(), "text/html; charset=utf-8")
-            given = parse_qs(body.decode("utf-8", "replace")).get("password", [""])[0]
-            if hmac.compare_digest(given.encode(), PASSWORD.encode()):
+            if right:
                 expiry = int(time.time()) + SESSION_DAYS * 86400
                 secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""
                 return self.redirect("/", f"smoketrace={session_value(expiry)}; Max-Age={SESSION_DAYS * 86400};"
                                           f" Path=/; HttpOnly; SameSite=Strict{secure}")
-            LOGIN_FAIL["at"] = time.time()
-            time.sleep(1)       # slows down guessing; meanwhile others are answered 429 at once
+            time.sleep(1)       # slows down guessing (outside the lock); meanwhile others are answered 429 at once
             page = LOGIN_PAGE.replace("%ERROR%", '<p class="err" role="alert">Wrong password.</p>')
             return self.send(401, page.encode(), "text/html; charset=utf-8")
         if path == "/api/targets":

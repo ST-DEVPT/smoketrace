@@ -955,6 +955,19 @@ def test_wrong_passwords_one_a_second():
             first.join()
             time.sleep(0.8)
             e = expect_http(401, lambda: call(url + "/login", form="password=c"))   # a second later: checked again
+            time.sleep(1.1)
+            codes, go = [], threading.Barrier(6)
+
+            def guess():
+                go.wait()
+                try:
+                    call(url + "/login", form="password=burst")
+                except urllib.error.HTTPError as e:
+                    codes.append(e.code)
+            burst = [threading.Thread(target=guess) for _ in range(6)]
+            [t.start() for t in burst]
+            [t.join() for t in burst]
+            assert sorted(codes) == [401] + [429] * 5, codes                 # six at the same moment: one guess
         finally:
             st.PASSWORD = None
             st.LOGIN_FAIL["at"] = 0.0
