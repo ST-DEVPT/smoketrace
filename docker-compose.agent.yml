@@ -25,7 +25,7 @@ services:
       # LISTEN: 0.0.0.0:8100
 
       # TRACE_PARALLEL: "16"     # traceroutes at once (1-64)
-      # ASN: "0"                 # no AS lookups on hops
+      # ASN: "0"                 # no AS lookups on hops, and this site does not look up its public address
     logging:
       options: {max-size: 10m, max-file: "3"}
     read_only: true

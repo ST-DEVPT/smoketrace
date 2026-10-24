@@ -291,7 +291,7 @@ Everything is an environment variable in `docker-compose.yml` (or a flag without
 
 | Option | What it does |
 | --- | --- |
-| `DEMO=1` | Made-up data and no probes, to try the page. |
+| `DEMO=1` | Made-up data and no probes, to try the page. It keeps its own `demo.db` next to `DB`, so your history is never touched. |
 | `IMPORT_RRD` | Import SmokePing's history from this folder ([how](docs/smokeping.md#bring-the-history-along)). |
 
 The round length (5 minutes) and the pings per round (20) are SmokePing's defaults; with SmokePing's config, its
@@ -322,8 +322,8 @@ GRANT ALL ON smoketrace.* TO 'smoketrace'@'%';
 socket instead of TCP: `mariadb://smoketrace@localhost/smoketrace?socket=/run/mysqld/mysqld.sock`. Special
 characters in a password in the address are written `%XX` (`@` is `%40`); `DB_PASSWORD` takes it as it is.
 
-Without Docker, MariaDB needs [PyMySQL](https://pypi.org/project/PyMySQL/) (`pip install PyMySQL`, or Debian's
-`python3-pymysql`); SQLite needs nothing. The image has it.
+Without Docker, MariaDB needs [PyMySQL](https://pypi.org/project/PyMySQL/) (`pip install --require-hashes -r
+requirements.txt`, or Debian's `python3-pymysql`); SQLite needs nothing. The image has it.
 
 **Moving your history across.** `--copy-from` copies another database's rows into `DB`, once, either way round
 (rows already in `DB` are kept). Stop smoketrace first, then, with Docker:

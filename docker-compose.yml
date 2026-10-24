@@ -12,7 +12,7 @@
 
 services:
   smoketrace:
-    image: ghcr.io/st-devpt/smoketrace:latest      # or pin a version: ghcr.io/st-devpt/smoketrace:0.8
+    image: ghcr.io/st-devpt/smoketrace:latest      # or pin a version: ghcr.io/st-devpt/smoketrace:0.14
     container_name: smoketrace
     restart: unless-stopped
     network_mode: host            # traceroutes start at your real gateway, not at Docker's bridge
@@ -63,7 +63,7 @@ services:
       # STEP: 3m                  # pings every 3 minutes (default 5, or SmokePing's step); agents follow
       # TRACE_STEP: 15m           # a traceroute of each target every 15 minutes (default: every round)
       # TRACE_PARALLEL: "16"      # traceroutes at once (1-64): fewer use less CPU, more trace each target more often
-      # ASN: "0"                  # no AS numbers and operator names on hops
+      # ASN: "0"                  # no AS numbers and operator names on hops, no public address for the Sites page
     logging:
       options: {max-size: 10m, max-file: "3"}
     read_only: true

@@ -42,7 +42,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: "3.13"
-      - run: pip install PyMySQL==1.2.3
+      - run: pip install --require-hashes -r requirements.txt
       - run: python test_smoketrace.py
         env:
           TEST_DB: mariadb://st:st-pw@127.0.0.1:3306/st
@@ -214,6 +214,12 @@ jobs:
         run: |
           for i in $(seq 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' server)" = healthy ] && exit 0; sleep 2; done
           docker inspect -f '{{json .State.Health}}' server; exit 1
+      - name: Docker reports a pull agent healthy (its health check asks its own port, LISTEN's)
+        run: |
+          docker run -d --name puller --network host --read-only --cap-drop ALL --cap-add NET_RAW \
+            --security-opt no-new-privileges:true -e LISTEN=127.0.0.1:8100 -e TOKEN=pull-secret-0123456789 smoketrace:test
+          for i in $(seq 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' puller)" = healthy ] && exit 0; sleep 2; done
+          docker inspect -f '{{json .State.Health}}' puller; docker logs puller; exit 1
       - if: always()
         run: docker logs server; docker logs agent
 

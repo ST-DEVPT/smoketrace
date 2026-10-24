@@ -2,6 +2,31 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.14.1] - 2026-10-24
+
+A review of the whole project; what it found:
+
+- **Fixed: `DEMO=1` deleted the real history.** The demo starts by deleting its database, and in the image `DB` is
+  `/data/smoketrace.db`, so turning the demo on in an existing compose file wiped it (and, since 0.14.0, dropped
+  every table of a MariaDB `DB`). The demo now keeps its own `demo.db` next to `DB`, refuses a MariaDB `DB`, and a
+  test checks it can never pick the database `DB` names.
+- **Fixed: an agent behind a proxy could lose every round.** 0.13.1 dropped any round answered 400, but a 400 may
+  come from a proxy in front of the server (plain HTTP sent to an HTTPS port, a firewall) and then every round was
+  thrown away. A round is dropped only when smoketrace itself refused it (its `bad round` answer, any version) or
+  it is too large to ever pass; any other answer keeps it until the path is fixed.
+- **Fixed: a pull agent's container was always "unhealthy".** Its health check built the address from `LISTEN`
+  wrongly (`127.0.0.1:81000.0.0.0:8100`). CI now starts a pull agent and waits for Docker to call it healthy.
+- **Fixed: `PINGS=1` broke every chart longer than a day** (a division by `PINGS - 1`).
+- Errors inside a request are answered (500; 503 to an agent's push, which keeps that round and sends it again)
+  instead of the connection being dropped; a trace whose row the daily prune already removed reads as empty.
+- **All sites** lines its sites' heatmap cells up: a site's board made a cell earlier is made again.
+- **Sign-in**: wrong passwords go one a second however many are sent at once (the rest are answered 429 at once,
+  without a thread held for each).
+- The image's one package, PyMySQL, is pinned by hash (`requirements.txt`, kept current by Dependabot), and a
+  failed install fails the build.
+- Docs: the compose files' pinned-version example and the `ASN=0` notes; SECURITY.md lists the Sites page, the
+  outside lookups and MariaDB.
+
 ## [0.14.0] - 2026-10-24
 
 - **MariaDB as the database, if you want it.** SQLite stays the default. `DB=mariadb://user:password@host:3306/name`

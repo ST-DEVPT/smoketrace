@@ -730,8 +730,10 @@ def test_sign_in_and_metrics():
 
 
 def test_a_refused_round_does_not_hold_up_the_rest():
-    """The agent drops a round the server refuses (400) and sends the next; on 5xx it keeps them all."""
-    answers, got = [400, 200, 503, 200, 200], []
+    """The agent drops a round the server refuses (400 "bad round") and sends the next; on 5xx, or a 400 that
+    is not the server's (a proxy in front), it keeps them all."""
+    answers, got = [400, 200, 503, 200, 200, "proxy", 200, 200], []
+    bodies = {400: b'{"error":"bad round: test"}', "proxy": b"<html>400 The plain HTTP request was sent to HTTPS port"}
 
     class Server(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -741,7 +743,7 @@ def test_a_refused_round_does_not_hold_up_the_rest():
         def do_POST(self):
             got.append(json.loads(self.rfile.read(int(self.headers["Content-Length"])))["ts"])
             code = answers.pop(0)
-            self.reply(code, b'{"error":"bad round: test"}' if code == 400 else b'{"ok":true}')
+            self.reply(400 if code == "proxy" else code, bodies.get(code, b'{"ok":true}'))
 
         def reply(self, code, body):
             self.send_response(code)
@@ -761,7 +763,11 @@ def test_a_refused_round_does_not_hold_up_the_rest():
         ticks[0](600)                     # sent
         ticks[0](900)                     # 503: kept
         ticks[0](1200)                    # 900 then 1200
-        assert got == [300, 600, 900, 900, 1200], got
+        ticks[0](1500)                    # a proxy's 400: kept, not dropped
+        ticks[0](1800)                    # 1500 then 1800
+        assert got == [300, 600, 900, 900, 1200, 1500, 1500, 1800], got
+        assert st.refused(400, '{"error":"bad round"}') and st.refused(413, "") and not st.refused(400, "{}")
+        assert not st.refused(400, "<html>") and not st.refused(401, '{"error":"bad round"}')
     finally:
         st.every_round, st.STEP, st.PINGS, st.TRACE_STEP = saved
         srv.shutdown()
@@ -874,6 +880,104 @@ def test_sites_over_http():
             st.BOARD_CACHE.clear()
             srv.shutdown()
             srv.server_close()
+
+
+def test_one_ping_per_round():
+    """PINGS=1 (allowed from 1 to 100): a week's chart buckets rounds and once divided by PINGS - 1."""
+    saved = st.PINGS
+    st.PINGS = 1
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d, "s.db")
+            st.init_db(db, "local")
+            now = 10_000_000
+            t = target("t")
+            rows = [st.round_rows("local", ts, {"t": [5.0 + ts % 7]}, {})[0][0] for ts in range(now - 3 * 86400, now, st.STEP)]
+            st.store(db, rows, [], now)
+            with st.db_open(db) as c:
+                det = st.target_detail(c, "local", t, 7 * 86400, now)
+            assert det["bucket"] > st.STEP and all(len(p[4]) == 1 for p in det["points"]), det["points"][:2]
+    finally:
+        st.PINGS = saved
+
+
+def test_a_trace_gone_from_under_its_route():
+    """The daily prune deletes a table at a time: a route row whose trace is gone gives an empty trace."""
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d, "s.db")
+        st.init_db(db, "local")
+        st.store(db, *st.round_rows("local", 600, {}, {"t": [hop(1, "10.0.0.1"), hop(2, "10.0.0.9")]}), 600)
+        with st.db_open(db) as c:
+            c.execute("DELETE FROM trace")
+            tr = st.trace_detail(c, "local", "t", None, "route")
+        assert tr["cur"]["hops"] == [] and tr["rows"] == []
+
+
+def test_the_demo_never_deletes_the_real_history():
+    assert st.demo_db(None) == st.HERE / "demo.db"
+    assert st.demo_db("/data/smoketrace.db") == Path("/data/demo.db")         # what the image's DB used to lose
+    for bad in ("mariadb://st@db/st", "/data/demo.db"):
+        try:
+            st.demo_db(bad)
+            raise AssertionError(bad)
+        except SystemExit:
+            pass
+
+
+def test_errors_inside_are_answered():
+    with tempfile.TemporaryDirectory() as d:
+        db, srv, url = server_with(d)
+        saved = st.overview, st.store
+        try:
+            st.overview = lambda *a: 1 / 0
+            expect_http(500, lambda: call(url + "/api/overview"))           # not a dropped connection
+            st.store = lambda *a: (_ for _ in ()).throw(st.sqlite3.OperationalError("database is locked"))
+            e = expect_http(503, lambda: call(url + "/api/agent/push", {"ts": int(time.time()), "pings": {"t": [1.0]}}))
+            assert not st.refused(503, e.read().decode())                    # the agent keeps that round
+            req = urllib.request.Request(url + "/api/agent/push", data=b"{}", headers={"Content-Length": "x"})
+            expect_http(400, lambda: urllib.request.urlopen(req, timeout=5))
+        finally:
+            st.overview, st.store = saved
+            srv.shutdown()
+            srv.server_close()
+
+
+def test_wrong_passwords_one_a_second():
+    with tempfile.TemporaryDirectory() as d:
+        db, srv, url = server_with(d)
+        st.PASSWORD = "correct horse"
+        try:
+            first = threading.Thread(target=lambda: expect_http(401, lambda: call(url + "/login", form="password=a")))
+            first.start()
+            time.sleep(0.3)                                                  # the first is still being slowed down
+            e = expect_http(429, lambda: call(url + "/login", form="password=b"))
+            assert "Too many tries" in e.read().decode()
+            first.join()
+            time.sleep(0.8)
+            e = expect_http(401, lambda: call(url + "/login", form="password=c"))   # a second later: checked again
+        finally:
+            st.PASSWORD = None
+            st.LOGIN_FAIL["at"] = 0.0
+            srv.shutdown()
+            srv.server_close()
+
+
+def test_all_lines_up_its_sites():
+    """A site's board made a cell earlier is made again, so every site's cells are the same minutes in "all"."""
+    with tempfile.TemporaryDirectory() as d:
+        db, srv, url = server_with(d)
+        srv.shutdown()
+        srv.server_close()
+        try:
+            now = 2_000_000 // 900 * 900 + 100
+            with st.db_open(db) as c:
+                old = st.board(c, st.Handler.sources, "porto", st.Handler.targets, 86400, now - 300)    # a cell before
+                st.BOARD_CACHE[("porto", 86400)] = (now - 300, st.last_rounds(c), old, b"{}")
+                merged = st.Handler.fresh_board(c, st.ALL, 86400, now)[0]
+            assert old["start"] != merged["start"]
+            assert st.BOARD_CACHE[("porto", 86400)][2]["start"] == merged["start"]
+        finally:
+            st.BOARD_CACHE.clear()
 
 
 def test_a_stale_board_is_served_while_a_new_one_is_made():

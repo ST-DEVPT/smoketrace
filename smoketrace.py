@@ -50,7 +50,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-VERSION = "0.14.0"           # the top of CHANGELOG.md says the same; a test checks
+VERSION = "0.14.1"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
@@ -961,7 +961,7 @@ def bucketize(rows, bucket):
     for ts, g in groups.items():
         allr = sorted(v for row in g for v in json.loads(row[4]))
         n = len(allr)
-        smoke = [allr[round(i * (n - 1) / (PINGS - 1))] for i in range(PINGS)] if n else []
+        smoke = [allr[round(i * (n - 1) / max(1, PINGS - 1))] for i in range(PINGS)] if n else []
         jits = [row[3] for row in g if row[3] is not None]
         out.append([ts, r2(statistics.median(allr)) if n else None, round(statistics.fmean(row[2] for row in g), 1),
                     r2(statistics.fmean(jits)) if jits else None, smoke])
@@ -1386,6 +1386,18 @@ def take_steps(got):
     TRACE_STEP = _int(got["trace_step"], 60, 86400) if got.get("trace_step") else None
 
 
+def refused(code, body):
+    """Did the server refuse this round for what it holds? Only then is it dropped: smoketrace's own answer
+    ({"error": "bad round..."}, every version), or a round too large to ever pass. Any other 400 may be a proxy in
+    front (HTTP sent to an HTTPS port, a firewall), and the round waits until that is fixed."""
+    if code == 413:
+        return True
+    try:
+        return code == 400 and str(json.loads(body).get("error", "")).startswith("bad round")
+    except (ValueError, AttributeError):
+        return False
+
+
 def run_agent(server, token, ping_fn, trace_fn):
     """Push mode: probe from here, push each round to the server; keep rounds while it is unreachable."""
     def call(path, body=None):
@@ -1414,12 +1426,12 @@ def run_agent(server, token, ping_fn, trace_fn):
             try:
                 call("/api/agent/push", backlog[0])
             except urllib.error.HTTPError as e:
-                why = e.read()[:300].decode("utf-8", "replace")
-                if e.code not in (400, 413):     # a wrong token or a server in trouble: keep it for later
-                    log(f"push to {server} failed, {len(backlog)} round(s) kept: {e} {why}")
+                why = e.read(4000).decode("utf-8", "replace")
+                if not refused(e.code, why):     # a wrong token, a server in trouble, a proxy: keep it for later
+                    log(f"push to {server} failed, {len(backlog)} round(s) kept: {e} {why[:300]}")
                     break
                 # refused for what it holds: sending it again cannot help, and it must not hold up the rest
-                log(f"push to {server}: the round of {backlog[0]['ts']} was refused and is dropped: {e} {why}")
+                log(f"push to {server}: the round of {backlog[0]['ts']} was refused and is dropped: {e} {why[:300]}")
             except Exception as e:
                 log(f"push to {server} failed, {len(backlog)} round(s) kept: {e}")
                 break
@@ -1445,7 +1457,7 @@ def run_listener(listen, token, ping_fn, trace_fn):
                 return self.reply(401, b'{"error":"bad token"}')
             try:
                 size = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(min(size, MAX_PUSH)))
+                body = json.loads(self.rfile.read(min(max(size, 0), MAX_PUSH)))
                 with lock:
                     state["targets"] = agent_targets(body["targets"])
                     take_steps(body)
@@ -1528,7 +1540,8 @@ def load_paths(db, src, tid, since=0):
 
 
 def hops_at(db, src, tid, ts):
-    return json.loads(db.execute("SELECT hops FROM trace WHERE source=? AND target=? AND ts=?", (src, tid, ts)).fetchone()[0])
+    row = db.execute("SELECT hops FROM trace WHERE source=? AND target=? AND ts=?", (src, tid, ts)).fetchone()
+    return json.loads(row[0]) if row else []
 
 
 def last_rounds(db):
@@ -2085,6 +2098,8 @@ FONTS = {"/fonts/archivo.woff2": "archivo.woff2", "/fonts/plex-mono-400.woff2": 
 
 # ---------- sign-in ----------
 
+LOGIN_FAIL = {"at": 0.0}    # when a wrong password last came in: guesses go one a second, whoever sends them
+
 def session_value(expiry):
     sig = hmac.new(PASSWORD.encode(), str(expiry).encode(), hashlib.sha256).hexdigest()
     return f"{expiry}.{sig}"
@@ -2128,7 +2143,7 @@ button{width:100%;margin-top:22px;padding:11px;border:1px solid var(--ink);borde
 <label for="p" id="l">Password</label><input id="p" name="password" type="password" autocomplete="current-password" autofocus required>
 <button id="b">Sign in</button>%ERROR%</form>
 <script>if((localStorage.getItem("lang")||navigator.language||"").slice(0,2)==="pt"){const T={h:"Entrar",s:"Use a palavra-passe definida em PASSWORD.",l:"Palavra-passe",b:"Entrar"};
-for(const k in T)document.getElementById(k).textContent=T[k];const e=document.querySelector(".err");if(e)e.textContent="Palavra-passe errada."}</script>
+for(const k in T)document.getElementById(k).textContent=T[k];const e=document.querySelector(".err");if(e)e.textContent=e.dataset.k==="busy"?"Demasiadas tentativas: espere um segundo e tente de novo.":"Palavra-passe errada."}</script>
 </body></html>"""
 
 
@@ -2206,21 +2221,43 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, b'{"error":"not found"}', "application/json")
         except ValueError:
             self.send(400, b'{"error":"bad request"}', "application/json")
+        except OSError:
+            raise                       # the viewer went away: nothing to answer
+        except Exception as e:          # the database locked or gone, a bug: say so instead of hanging up
+            log(f"GET {u.path}: {e!r}")
+            self.send(500, b'{"error":"server error"}', "application/json")
 
     def do_POST(self):
+        try:
+            self.post()
+        except OSError:
+            raise
+        except Exception as e:          # an agent keeps a round answered 503 and sends it again
+            log(f"POST {urlparse(self.path).path}: {e!r}")
+            self.send(503, b'{"error":"server error, try again"}', "application/json")
+
+    def post(self):
         path = urlparse(self.path).path
-        size = int(self.headers.get("Content-Length") or 0)
+        try:
+            size = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self.send(400, b'{"error":"bad length"}', "application/json")
         if not 0 < size <= MAX_PUSH:
             return self.send(413, b'{"error":"too large"}', "application/json")
         body = self.rfile.read(size)
         if path == "/login" and PASSWORD:
+            if time.time() - LOGIN_FAIL["at"] < 1:      # a wrong password in the last second: no check, no wait
+                page = LOGIN_PAGE.replace("%ERROR%", '<p class="err" role="alert" data-k="busy">Too many tries: '
+                                                     'wait a second and try again.</p>')
+                return self.send(429, page.encode(), "text/html; charset=utf-8")
             given = parse_qs(body.decode("utf-8", "replace")).get("password", [""])[0]
             if hmac.compare_digest(given.encode(), PASSWORD.encode()):
                 expiry = int(time.time()) + SESSION_DAYS * 86400
                 secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""
                 return self.redirect("/", f"smoketrace={session_value(expiry)}; Max-Age={SESSION_DAYS * 86400};"
                                           f" Path=/; HttpOnly; SameSite=Strict{secure}")
-            time.sleep(1)       # slows down guessing
+            LOGIN_FAIL["at"] = time.time()
+            time.sleep(1)       # slows down guessing; meanwhile others are answered 429 at once
             page = LOGIN_PAGE.replace("%ERROR%", '<p class="err" role="alert">Wrong password.</p>')
             return self.send(401, page.encode(), "text/html; charset=utf-8")
         if path == "/api/targets":
@@ -2254,7 +2291,9 @@ class Handler(BaseHTTPRequestHandler):
         with BOARD_LOCKS.setdefault(key, threading.Lock()):     # many viewers, one computation
             at, ver, data, body = BOARD_CACHE.get(key, (0, None, None, None))
             version = last_rounds(db)
-            if data is None or ver != version or now - at >= STEP:     # none yet, a new round, or time moved
+            width = BOARD_BUCKET.get(rng, 900)
+            moved = data is not None and data.get("start") != (now - rng) // width * width   # sites' cells must line up
+            if data is None or ver != version or now - at >= STEP or moved:     # none yet, a new round, time moved
                 data = (merge_boards([cls.fresh_board(db, s, rng, now)[0] for s in cls.sources]) if src == ALL
                         else board(db, cls.sources, src, cls.targets, rng, now))
                 body = json.dumps(data, separators=(",", ":")).encode()
@@ -2577,6 +2616,20 @@ def seed_demo(path, source, targets, ping, trace, t0, days=7):
         db.executemany("INSERT OR REPLACE INTO asn VALUES (?, ?, 0)", DEMO_AS.items())
 
 
+def demo_db(configured):
+    """The demo's own SQLite file. The demo starts by deleting its database, so it is never the one DB names
+    (in the image DB is /data/smoketrace.db, the real history): a demo.db beside it instead, and none in MariaDB."""
+    if not configured:
+        return HERE / "demo.db"
+    if db_kind(configured) == "mariadb":
+        raise SystemExit("DEMO=1 with DB=mariadb://...: the demo deletes its database first, so it only runs on its "
+                         "own SQLite file; leave DB unset for the demo")
+    out = Path(configured).with_name("demo.db")
+    if out.resolve() == Path(configured).resolve():
+        raise SystemExit(f"DEMO=1: {configured} would be deleted; give the demo a database of its own")
+    return out
+
+
 # ---------- main ----------
 
 CONFIG = {"stamp": None, "files": [], "source": "demo", "edited": None, "args": None}
@@ -2685,7 +2738,7 @@ def main():
     if a.demo:
         STEP = STEP_ENV or STEP
         targets = [make_target(slug(f"{g}-{n}"), g, n, **parse_host(h)) for g, n, h, _ in DEMO_TARGETS]
-        db = a.db or HERE / "demo.db"
+        db = demo_db(a.db)
         reset_db(db)
         t0 = int(time.time())
         init_db(db, a.name)
