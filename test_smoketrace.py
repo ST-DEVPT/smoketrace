@@ -22,6 +22,15 @@ st.MY_IP.update(at=float("inf"))     # no public address lookups: these checks s
 TOKEN = "0123456789abcdef"
 
 
+def new_db(d, name):
+    """A database for one test: a SQLite file in d, or, with TEST_DB=mariadb://..., that MariaDB emptied."""
+    url = os.environ.get("TEST_DB")
+    if not url:
+        return Path(d, name)
+    st.reset_db(url)
+    return url
+
+
 def hop(ttl, ip, loss=0.0, asn=None):
     return {"ttl": ttl, "ip": ip, "asn": asn, "loss": loss, "avg": 10.0 if ip else None, "best": None, "wrst": None,
             "sd": None}
@@ -496,7 +505,7 @@ def test_trace_detail_compares_previous_route():
     A = [hop(1, "a", asn="AS1"), hop(2, "b")]
     B = [hop(1, "a", asn="AS1"), hop(2, "x", asn="AS2")]
     with tempfile.TemporaryDirectory() as d:
-        db = Path(d, "t.db")
+        db = new_db(d, "t.db")
         st.init_db(db, "local")
         st.store(db, [], [("local", "t", ts, json.dumps(h), st.path_key(h)) for ts, h in ((0, A), (300, A), (600, B), (900, B))], 900)
         with st.db_open(db) as c:
@@ -643,7 +652,7 @@ def test_tcp_and_dns_probes():
 # ---------- the server over HTTP ----------
 
 def server_with(d, **handler):
-    db = Path(d, "s.db")
+    db = new_db(d, "s.db")
     st.init_db(db, "local")
     st.Handler.db = db
     st.Handler.sources = ["local", "porto", "office"]
@@ -804,7 +813,7 @@ def test_where_a_site_is():
         st.dns_txt, st.ASN_LOOKUP = saved, True
         st.MY_IP.update(at=float("inf"), ip=None)
     with tempfile.TemporaryDirectory() as d:
-        db = Path(d, "s.db")
+        db = new_db(d, "s.db")
         st.init_db(db, "local")
         st.note_site(db, "porto", "85.241.2.3")
         with st.db_open(db) as c:
@@ -938,7 +947,7 @@ def test_targets_edited_on_the_page():
                 assert str(e).startswith(field + ":"), e
         assert [t["id"] for t in st.edit_targets(new, "delete", {"id": "internet-shop"})] == ["internet-cloudflare", "internet-cloudflare-2"]
         # over HTTP: only signed in, only JSON; the first edit moves the list to targets.json, which then wins
-        db = Path(d, "s.db")
+        db = new_db(d, "s.db")
         st.init_db(db, "home")
         st.Handler.db = db
         srv, url = serve(st.Handler)
@@ -1082,7 +1091,7 @@ def test_alerts():
 def test_board_minis_compare_and_gzip():
     import gzip
     with tempfile.TemporaryDirectory() as d:
-        db = Path(d, "b.db")
+        db = new_db(d, "b.db")
         st.init_db(db, "local")
         t0 = int(time.time())
         targets = [st.make_target(st.slug(f"{g}-{n}"), g, n, **st.parse_host(h)) for g, n, h, _ in st.DEMO_TARGETS
@@ -1118,6 +1127,36 @@ def test_board_minis_compare_and_gzip():
             srv.shutdown()
             srv.server_close()
             st.BOARD_CACHE.clear()
+
+
+def test_mariadb_dialect():
+    assert st.db_kind("mariadb://u:p@h/db") == st.db_kind("mysql://h/db") == "mariadb"
+    assert st.db_kind("/data/smoketrace.db") == st.db_kind(Path("x.db")) == "sqlite"
+    assert st.mariadb_sql("INSERT OR IGNORE INTO asn VALUES (?, NULL, 0)") == "INSERT IGNORE INTO asn VALUES (%s, NULL, 0)"
+    assert st.mariadb_sql("INSERT OR REPLACE INTO ping VALUES (?,?)") == "REPLACE INTO ping VALUES (%s,%s)"
+    assert st.mariadb_sql("SELECT '%' FROM t WHERE a=?") == "SELECT '%%' FROM t WHERE a=%s"
+
+
+def test_copy_between_databases():
+    """SQLite into another database (MariaDB with TEST_DB) and back: every row, rows already there kept."""
+    with tempfile.TemporaryDirectory() as d:
+        a, b, c = Path(d, "a.db"), new_db(d, "b.db"), Path(d, "c.db")
+        for x in (a, b, c):
+            st.init_db(x, "local")
+        st.store(a, *st.round_rows("local", 300, {"t": [10.0, 11.0]}, {"t": [hop(1, "a", asn="AS1"), hop(2, "b")]}), 300)
+        st.store(a, *st.round_rows("local", 600, {"t": [12.0]}, {}), 600)
+        st.note_site(a, "local", "192.0.2.1")
+        st.store(b, *st.round_rows("local", 600, {"t": [99.0]}, {}), 600)      # already there: it stays
+        st.PRUNED["day"] = None
+        st.copy_db(a, b)
+        st.copy_db(b, c)
+        for x in (b, c):
+            with st.db_open(x) as db:
+                assert db.execute("SELECT ts, median FROM ping ORDER BY ts").fetchall() == [(300, 10.5), (600, 99.0)]
+                assert db.execute("SELECT path FROM path").fetchone()[0] == "a,b"
+                assert db.execute("SELECT asn FROM asn").fetchone()[0] == "AS1"
+                assert db.execute("SELECT ip FROM site WHERE name=?", ("local",)).fetchone()[0] == "192.0.2.1"
+                assert st.last_rounds(db) == {"local": 600}
 
 
 if __name__ == "__main__":

@@ -1,0 +1,53 @@
+# smoketrace server with its history in MariaDB instead of SQLite: docker-compose.yml plus a database of its own.
+#
+#   mkdir smoketrace && cd smoketrace
+#   curl -O https://raw.githubusercontent.com/ST-DEVPT/smoketrace/main/docker-compose.mariadb.yml
+#   (change PASSWORD and both database passwords below: DB_PASSWORD and MARIADB_PASSWORD are the same one)
+#   docker compose -f docker-compose.mariadb.yml up -d
+#
+# Every other option is in docker-compose.yml and the README; they all work here too.
+# A MariaDB you already run: leave out the mariadb service and point DB at it.
+
+services:
+  smoketrace:
+    image: ghcr.io/st-devpt/smoketrace:latest
+    container_name: smoketrace
+    restart: unless-stopped
+    network_mode: host            # traceroutes start at your real gateway, not at Docker's bridge
+    depends_on:
+      mariadb: {condition: service_healthy}
+    volumes:
+      - ./data:/data              # your targets (the history is in MariaDB)
+    environment:
+      TZ: Europe/Lisbon
+      NAME: home
+      PASSWORD: change-me
+      DB: mariadb://smoketrace@127.0.0.1:3306/smoketrace     # the mariadb service below, on this host's loopback
+      DB_PASSWORD: change-this-database-password
+    logging:
+      options: {max-size: 10m, max-file: "3"}
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    security_opt: ["no-new-privileges:true"]
+
+  mariadb:
+    image: mariadb:11.4           # the LTS line; smoketrace needs 10.5 or later
+    container_name: smoketrace-mariadb
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:3306:3306       # this host only: smoketrace runs on the host's network
+    volumes:
+      - ./mariadb:/var/lib/mysql  # the history: back up this folder (or mariadb-dump the database)
+    environment:
+      MARIADB_DATABASE: smoketrace
+      MARIADB_USER: smoketrace
+      MARIADB_PASSWORD: change-this-database-password
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      options: {max-size: 10m, max-file: "3"}

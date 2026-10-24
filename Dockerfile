@@ -2,8 +2,10 @@
 FROM python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
 
 # fping and mtr are the probes; tzdata lets TZ set the time in the logs.
-# pip and setuptools only install packages, and smoketrace installs none: they go, with what they bundle.
-RUN python -m pip uninstall -y pip setuptools wheel; \
+# PyMySQL (pure Python, no compiler) is the one package: it talks to MariaDB when DB=mariadb://...; SQLite needs none.
+# Then pip and setuptools go, with what they bundle: nothing else is installed after this.
+RUN python -m pip install --no-cache-dir PyMySQL==1.2.3 \
+ && python -m pip uninstall -y pip setuptools wheel; \
     rm -rf /usr/local/lib/python3*/ensurepip /root/.cache; \
     apk add --no-cache fping mtr tini tzdata \
  && mkdir /data

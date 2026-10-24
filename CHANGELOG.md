@@ -2,6 +2,17 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.14.0] - 2026-10-24
+
+- **MariaDB as the database, if you want it.** SQLite stays the default. `DB=mariadb://user:password@host:3306/name`
+  (or `mysql://`, MySQL 8 too) keeps the history in MariaDB instead; the password can go in `DB_PASSWORD`.
+  smoketrace makes its tables at the first start. [`docker-compose.mariadb.yml`](docker-compose.mariadb.yml)
+  runs it with a MariaDB of its own. The image now carries PyMySQL for this; without Docker, `pip install PyMySQL`.
+- **`--copy-from`** (`COPY_FROM`): one-off, copies another database's history into `DB`, SQLite to MariaDB or
+  back; rows already there are kept.
+- Rounds stored at the same moment from several sites retry when MariaDB reports a deadlock, and the daily
+  clean-up of old rows runs apart from the round that triggers it.
+
 ## [0.13.1] - 2026-10-22
 
 - **Fixed: one refused round stopped an agent for good.** The agent kept a round the server refused (HTTP 400)

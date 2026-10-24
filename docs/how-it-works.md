@@ -34,7 +34,7 @@ flowchart LR
   T["Targets page, targets.ini<br>or SmokePing's config"] --> R{{"every 5 minutes"}}
   R --> F["latency: fping -C 20,<br>TCP connects, DNS queries"]
   R --> M["mtr --json -z<br>16 at once"]
-  F --> DB[("SQLite<br>30 days")]
+  F --> DB[("SQLite or MariaDB<br>30 days")]
   M --> DB
   AG["Agents at other sites<br>same probes, same minutes"] -- "they send, or the server fetches" --> DB
   T -. "targets" .-> AG
@@ -55,8 +55,8 @@ flowchart LR
   round as well, while there is room. The page and `/metrics` are computed once per round, however many people look.
 - **AS numbers** come from mtr (`-z`, which asks Team Cymru over DNS); their names are looked up once and kept.
   `ASN=0` turns both off.
-- **Rows, not RRD.** Raw rounds stay in SQLite for 30 days; longer chart ranges are bucketed as they are read (600
-  points at most), so the smoke of a 30-day view is still the real spread.
+- **Rows, not RRD.** Raw rounds stay in the database (SQLite, or MariaDB) for 30 days; longer chart ranges are
+  bucketed as they are read (600 points at most), so the smoke of a 30-day view is still the real spread.
 - **Every source is kept apart.** The server's own probe and each agent have their own rows, routes and route
   letters; an agent's round is checked field by field before it is stored, and an agent checks every target it is
   given before it reaches a probe.

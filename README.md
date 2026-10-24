@@ -254,7 +254,8 @@ Everything is an environment variable in `docker-compose.yml` (or a flag without
 | `AGENTS` | none | The remote sites: `porto=token,office=token`. `name=token@http://site:8100` when the server fetches from the site. A site added later probes every target; untick it on a target to leave that one out. |
 | `SMOKEPING_CONFIG` | none | Read SmokePing's config from this folder or file ([details](docs/smokeping.md)). |
 | `TARGETS` | `/data/targets.ini` | The hand-written targets file; the page keeps its list next to it, in `targets.json`. |
-| `DB` | `/data/smoketrace.db` | The database. 30 days are kept. |
+| `DB` | `/data/smoketrace.db` | The database: a SQLite file, or MariaDB as `mariadb://user:password@host:3306/database` ([details](#sqlite-or-mariadb)). 30 days are kept. |
+| `DB_PASSWORD` | none | MariaDB's password, when it is not in `DB`. |
 
 **Alerts**
 
@@ -296,6 +297,42 @@ Everything is an environment variable in `docker-compose.yml` (or a flag without
 The round length (5 minutes) and the pings per round (20) are SmokePing's defaults; with SmokePing's config, its
 `*** Database ***` sets them, and `STEP` wins over both. For pings every 3 minutes and a traceroute of each target
 every 15: `STEP: 3m` and `TRACE_STEP: 15m`.
+
+## SQLite or MariaDB
+
+smoketrace keeps its history in SQLite by default: one file, `/data/smoketrace.db`, nothing to set up. It can use
+MariaDB (10.5 or later, or MySQL 8) instead, for instance one you already run and back up, or to keep the history
+off the probe's own disk. Set `DB` to the database's address and the rest is the same:
+
+```yaml
+    environment:
+      DB: mariadb://smoketrace@db.lan:3306/smoketrace     # mysql:// works too
+      DB_PASSWORD: the-database-password                  # or mariadb://smoketrace:password@db.lan/smoketrace
+```
+
+Create the database and a user for it once; smoketrace makes its tables at the first start:
+
+```sql
+CREATE DATABASE smoketrace;
+CREATE USER 'smoketrace'@'%' IDENTIFIED BY 'the-database-password';
+GRANT ALL ON smoketrace.* TO 'smoketrace'@'%';
+```
+
+[`docker-compose.mariadb.yml`](docker-compose.mariadb.yml) runs smoketrace with a MariaDB of its own. A local
+socket instead of TCP: `mariadb://smoketrace@localhost/smoketrace?socket=/run/mysqld/mysqld.sock`. Special
+characters in a password in the address are written `%XX` (`@` is `%40`); `DB_PASSWORD` takes it as it is.
+
+Without Docker, MariaDB needs [PyMySQL](https://pypi.org/project/PyMySQL/) (`pip install PyMySQL`, or Debian's
+`python3-pymysql`); SQLite needs nothing. The image has it.
+
+**Moving your history across.** `--copy-from` copies another database's rows into `DB`, once, either way round
+(rows already in `DB` are kept). Stop smoketrace first, then, with Docker:
+
+```sh
+docker compose run --rm smoketrace python smoketrace.py --copy-from /data/smoketrace.db
+```
+
+`DB` (from the compose file) is where the rows go. Start smoketrace again with the new `DB`.
 
 ## Common problems
 

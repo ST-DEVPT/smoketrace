@@ -9,6 +9,8 @@
   python3 smoketrace.py --import-rrd /var/lib/smokeping --smokeping /etc/smokeping/config
                                                         one-off: SmokePing's RRD history into the database
   python3 smoketrace.py --demo                          synthetic data, any OS, no probes
+  DB=mariadb://user:password@host/smoketrace python3 smoketrace.py
+                                                        the history in MariaDB instead of SQLite (needs PyMySQL)
 
 Every flag also reads an environment variable; README.md lists them.
 """
@@ -46,9 +48,9 @@ from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
-VERSION = "0.13.1"           # the top of CHANGELOG.md says the same; a test checks
+VERSION = "0.14.0"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
@@ -1051,17 +1053,159 @@ def agent_targets(got):
 
 # ---------- storage ----------
 
+TABLES = ("ping", "trace", "path", "asn", "rounds", "site")
+MARIADB_IDLE = {}           # url -> connections kept for the next db_open (they cost a TCP handshake and a login)
+MARIADB_LOCK = threading.Lock()
+MARIADB_KEEP = 8            # idle connections kept per database at most
+
+
+def db_kind(path):
+    """'mariadb' for DB=mariadb://user:password@host:3306/name (mysql:// too), else 'sqlite': a file."""
+    return "mariadb" if str(path).startswith(("mariadb://", "mysql://")) else "sqlite"
+
+
+@functools.lru_cache(maxsize=512)
+def mariadb_sql(sql):
+    """The SQLite this file writes, as MariaDB takes it: %s placeholders, INSERT IGNORE, REPLACE."""
+    sql = sql.replace("%", "%%").replace("?", "%s")
+    return re.sub(r"^(\s*)INSERT OR (IGNORE|REPLACE)\b",
+                  lambda m: m[1] + ("INSERT IGNORE" if m[2] == "IGNORE" else "REPLACE"), sql)
+
+
+class MariaDB:
+    """A MariaDB connection that answers like sqlite3's: execute() and executemany() return the cursor."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def execute(self, sql, params=()):
+        cur = self.conn.cursor()
+        cur.execute(mariadb_sql(sql), tuple(params))
+        return cur
+
+    def executemany(self, sql, rows):
+        cur, rows = self.conn.cursor(), [tuple(r) for r in rows]
+        if rows:
+            cur.executemany(mariadb_sql(sql), rows)
+        return cur
+
+
+def mariadb_connect(url):
+    """mariadb://user:password@host:port/database, ?socket=/run/mysqld/mysqld.sock for a local socket; the
+    password may be left out of the address and given in DB_PASSWORD instead."""
+    try:
+        import pymysql
+    except ImportError:
+        raise SystemExit("DB=mariadb://... needs PyMySQL: pip install PyMySQL (the Docker image has it)") from None
+    class Cursor(pymysql.cursors.Cursor):
+        def fetchall(self):           # a list, as sqlite3 gives (PyMySQL: a tuple)
+            return list(super().fetchall())
+
+    u = urlparse(url)
+    q = {k: v[-1] for k, v in parse_qs(u.query).items()}
+    password = unquote(u.password) if u.password is not None else os.environ.get("DB_PASSWORD", "")
+    return pymysql.connect(host=u.hostname or "127.0.0.1", port=u.port or 3306, unix_socket=q.get("socket"),
+                           user=unquote(u.username or "smoketrace"), password=password,
+                           database=unquote(u.path.lstrip("/")) or "smoketrace", charset="utf8mb4",
+                           autocommit=False, connect_timeout=10, cursorclass=Cursor,
+                           # fewer gap locks: agents storing rounds at the same minute do not deadlock each other
+                           init_command="SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+
+
 @contextmanager
 def db_open(path):
-    db = sqlite3.connect(path, timeout=30)
+    """One transaction: committed when the block ends, rolled back when it raises. SQLite or MariaDB (db_kind)."""
+    if db_kind(path) == "sqlite":
+        db = sqlite3.connect(path, timeout=30)
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+        return
+    url = str(path)
+    with MARIADB_LOCK:
+        idle = MARIADB_IDLE.setdefault(url, [])
+        conn = idle.pop() if idle else None
+    if conn is not None:
+        try:
+            conn.ping(False)            # the server may have closed it meanwhile (wait_timeout, a restart)
+        except Exception:
+            conn = None                 # dropped: closing a dead connection only raises again
+    if conn is None:
+        conn = mariadb_connect(url)
     try:
-        with db:
-            yield db
-    finally:
-        db.close()
+        yield MariaDB(conn)
+        conn.commit()
+    except BaseException:
+        try:                            # not kept: after an error its state is unknown
+            conn.rollback()
+            conn.close()
+        except Exception:
+            pass
+        raise
+    with MARIADB_LOCK:
+        if len(idle) < MARIADB_KEEP:
+            idle.append(conn)
+            conn = None
+    if conn is not None:
+        conn.close()
+
+
+def reset_db(path):
+    """Everything gone (the demo starts from nothing): the SQLite file, or smoketrace's tables in MariaDB."""
+    if db_kind(path) == "sqlite":
+        for suffix in ("", "-wal", "-shm"):
+            Path(f"{path}{suffix}").unlink(missing_ok=True)
+        return
+    with db_open(path) as db:
+        for t in TABLES:
+            db.execute(f"DROP TABLE IF EXISTS {t}")
+
+
+def copy_db(src, dst):
+    """One-off: every row of another smoketrace database (SQLite or MariaDB) into this one; rows already here win."""
+    for t in TABLES:
+        n, after = 0, None
+        while True:                   # a primary key's worth at a time: a month of traces does not fit in memory
+            with db_open(src) as s:
+                cols = [d[0] for d in s.execute(f"SELECT * FROM {t} LIMIT 0").description]
+                keys = {"asn": ["asn"], "site": ["name"], "rounds": ["source", "ts"]}.get(t, ["source", "target", "ts"])
+                where = f"WHERE ({', '.join(keys)}) > ({', '.join('?' * len(keys))}) " if after else ""
+                rows = s.execute(f"SELECT {', '.join(cols)} FROM {t} {where}ORDER BY {', '.join(keys)} LIMIT 5000",
+                                 after or ()).fetchall()
+            if not rows:
+                break
+            with db_open(dst) as d:
+                d.executemany(f"INSERT OR IGNORE INTO {t} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                              rows)
+            n += len(rows)
+            after = tuple(rows[-1][cols.index(k)] for k in keys)
+        log(f"{t}: {n} rows copied")
+
+
+MARIADB_SCHEMA = (   # the SQLite tables below, with lengths: NAME_RE, ID_RE and ASN_RE bound what goes in a key
+    "CREATE TABLE IF NOT EXISTS ping (source VARCHAR(32) NOT NULL, target VARCHAR(200) NOT NULL, ts BIGINT NOT NULL,"
+    " median DOUBLE, loss DOUBLE, jitter DOUBLE, rtts TEXT, PRIMARY KEY (source, target, ts))",
+    "CREATE TABLE IF NOT EXISTS trace (source VARCHAR(32) NOT NULL, target VARCHAR(200) NOT NULL, ts BIGINT NOT NULL,"
+    " hops MEDIUMTEXT, PRIMARY KEY (source, target, ts))",
+    "CREATE TABLE IF NOT EXISTS path (source VARCHAR(32) NOT NULL, target VARCHAR(200) NOT NULL, ts BIGINT NOT NULL,"
+    " path TEXT, PRIMARY KEY (source, target, ts))",
+    "CREATE TABLE IF NOT EXISTS asn (asn VARCHAR(16) NOT NULL PRIMARY KEY, name TEXT, ts BIGINT)",
+    "CREATE TABLE IF NOT EXISTS rounds (source VARCHAR(32) NOT NULL, ts BIGINT NOT NULL, PRIMARY KEY (source, ts))",
+    "CREATE TABLE IF NOT EXISTS site (name VARCHAR(32) NOT NULL PRIMARY KEY, ip VARCHAR(45), asn VARCHAR(16),"
+    " prefix VARCHAR(64), cc VARCHAR(8), place VARCHAR(255), country VARCHAR(8), provider VARCHAR(255), note TEXT)",
+)
 
 
 def init_db(path, source):
+    if db_kind(path) == "mariadb":
+        with db_open(path) as db:
+            for ddl in MARIADB_SCHEMA:    # _bin: names compare as SQLite compares them, case and all
+                db.execute(ddl + " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin")
+            if not db.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
+                db.execute("INSERT OR IGNORE INTO rounds SELECT DISTINCT source, ts FROM ping")
+        return
     with db_open(path) as db:
         db.execute("PRAGMA journal_mode=WAL")
         old = [r[1] for r in db.execute("PRAGMA table_info(ping)")]
@@ -1111,9 +1255,10 @@ def note_site(path, name, ip):
     """A site's public address; a new one is looked up again (its network and country) by the AS namer."""
     if not ip:
         return
-    with db_open(path) as db:
-        db.execute("INSERT INTO site (name, ip) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET ip=excluded.ip,"
-                   " asn=NULL, prefix=NULL, cc=NULL WHERE ip IS NOT excluded.ip", (name, ip))
+    with db_open(path) as db:     # written so SQLite and MariaDB both take it: no ON CONFLICT
+        db.execute("INSERT OR IGNORE INTO site (name) VALUES (?)", (name,))
+        db.execute("UPDATE site SET ip=?, asn=NULL, prefix=NULL, cc=NULL WHERE name=? AND (ip IS NULL OR ip<>?)",
+                   (ip, name, ip))
 
 
 SITE_FIELDS = {"place": 60, "country": 2, "provider": 60, "note": 200}
@@ -1137,9 +1282,8 @@ def edit_site(path, sources, d):
         if not re.fullmatch(r"[A-Z]{2}", vals["country"]):
             raise ValueError("country: two letters, like PT")
     with db_open(path) as db:
-        db.execute("INSERT INTO site (name, place, country, provider, note) VALUES (?,?,?,?,?) ON CONFLICT(name) DO"
-                   " UPDATE SET place=excluded.place, country=excluded.country, provider=excluded.provider,"
-                   " note=excluded.note", (d["name"], *vals.values()))
+        db.execute("INSERT OR IGNORE INTO site (name) VALUES (?)", (d["name"],))
+        db.execute("UPDATE site SET place=?, country=?, provider=?, note=? WHERE name=?", (*vals.values(), d["name"]))
 
 
 def site_info(db, sources):
@@ -1171,24 +1315,37 @@ PRUNED = {"day": None}
 
 def store(path, rp, rt, now):
     cut = now - RETENTION_DAYS * 86400
-    asns = {h["asn"] for row in rt for h in json.loads(row[3]) if h.get("asn")}
-    pairs = [(s, t, cut) for s, t in {r[:2] for r in rp} | {r[:2] for r in rt}]
-    with db_open(path) as db:
-        db.executemany("INSERT OR REPLACE INTO ping VALUES (?,?,?,?,?,?,?)", rp)
-        db.executemany("INSERT OR REPLACE INTO trace (source, target, ts, hops) VALUES (?,?,?,?)", [r[:4] for r in rt])
-        db.executemany("INSERT OR REPLACE INTO path VALUES (?,?,?,?)", [(*r[:3], r[4]) for r in rt])
-        db.executemany("INSERT OR IGNORE INTO asn VALUES (?, NULL, 0)", [(a,) for a in asns])
-        db.executemany("INSERT OR IGNORE INTO rounds VALUES (?, ?)", {(r[0], r[2]) for r in rp})
-        # old rows go along the primary key, target by target: a delete on ts alone reads the whole table
-        db.executemany("DELETE FROM ping WHERE source=? AND target=? AND ts<?", pairs)
-        db.executemany("DELETE FROM trace WHERE source=? AND target=? AND ts<?", pairs)
-        db.executemany("DELETE FROM path WHERE source=? AND target=? AND ts<?", pairs)
-        db.execute("DELETE FROM rounds WHERE ts<?", (cut,))
-        if PRUNED["day"] != now // 86400:      # targets no longer in the config: once a day, the slow way
+    asns = sorted({h["asn"] for row in rt for h in json.loads(row[3]) if h.get("asn")})
+    pairs = sorted((s, t, cut) for s, t in {r[:2] for r in rp} | {r[:2] for r in rt})
+    prune = PRUNED["day"] != now // 86400      # targets no longer in the config: once a day, the slow way
+    for attempt in range(5):
+        try:
+            with db_open(path) as db:
+                db.executemany("INSERT OR REPLACE INTO ping VALUES (?,?,?,?,?,?,?)", rp)
+                db.executemany("INSERT OR REPLACE INTO trace (source, target, ts, hops) VALUES (?,?,?,?)",
+                               [r[:4] for r in rt])
+                db.executemany("INSERT OR REPLACE INTO path VALUES (?,?,?,?)", [(*r[:3], r[4]) for r in rt])
+                db.executemany("INSERT OR IGNORE INTO asn VALUES (?, NULL, 0)", [(a,) for a in asns])
+                db.executemany("INSERT OR IGNORE INTO rounds VALUES (?, ?)", sorted({(r[0], r[2]) for r in rp}))
+                # old rows go along the primary key, target by target: a delete on ts alone reads the whole table
+                db.executemany("DELETE FROM ping WHERE source=? AND target=? AND ts<?", pairs)
+                db.executemany("DELETE FROM trace WHERE source=? AND target=? AND ts<?", pairs)
+                db.executemany("DELETE FROM path WHERE source=? AND target=? AND ts<?", pairs)
+                db.executemany("DELETE FROM rounds WHERE source=? AND ts<?", sorted({(r[0], cut) for r in rp}))
+            break
+        except Exception as e:
+            # MariaDB: two sites' rounds stored at once can deadlock (1213) or wait too long (1205); try again
+            if getattr(e, "args", (None,))[0] not in (1205, 1213) or attempt == 4:
+                raise
+            time.sleep(random.uniform(0.05, 0.5) * (attempt + 1))
+    if prune:           # a table at a time, apart from the round: a scan of the whole table holds up no one's round
+        try:
+            for t in ("ping", "trace", "path", "rounds"):
+                with db_open(path) as db:
+                    db.execute(f"DELETE FROM {t} WHERE ts<?", (cut,))
             PRUNED["day"] = now // 86400
-            db.execute("DELETE FROM ping WHERE ts<?", (cut,))
-            db.execute("DELETE FROM trace WHERE ts<?", (cut,))
-            db.execute("DELETE FROM path WHERE ts<?", (cut,))
+        except Exception as e:      # the round is stored; the next one tries again
+            log(f"pruning old rows: {e}")
 
 
 def every_round(fn):
@@ -2467,7 +2624,10 @@ def main():
     ap.add_argument("--targets", type=Path, default=Path(env("TARGETS", HERE / "targets.ini")))
     ap.add_argument("--smokeping", type=Path, default=env("SMOKEPING_CONFIG"),
                     help="read targets, slaves (as agents), step and pings from SmokePing's config instead")
-    ap.add_argument("--db", type=Path, default=env("DB"))
+    ap.add_argument("--db", default=env("DB"),
+                    help="a SQLite file (the default), or MariaDB: mariadb://user:password@host:3306/database")
+    ap.add_argument("--copy-from", metavar="DB", default=env("COPY_FROM"),
+                    help="one-off: copy another database's history into --db (SQLite to MariaDB, or back)")
     ap.add_argument("--bind", default=env("BIND", "127.0.0.1"))
     ap.add_argument("--port", type=int, default=int(env("PORT", "8099")))
     ap.add_argument("--name", default=env("NAME", "local"), help="what the dashboard calls this probe")
@@ -2496,6 +2656,12 @@ def main():
     ALERTS = Alerter(env("DISCORD_WEBHOOK"), env("NTFY_URL"), env("WEBHOOK_URL"), routes=env("ALERT_ROUTES", "1") != "0")
     if a.import_rrd:
         return import_rrd(a)
+    if a.copy_from:
+        db = a.db or HERE / "smoketrace.db"
+        if str(a.copy_from) == str(db):
+            raise SystemExit("--copy-from: that is the database itself")
+        init_db(db, a.name)
+        return copy_db(a.copy_from, db)
     if not a.demo:
         missing = [b for b in ("fping", "mtr") if not shutil.which(b)]
         if missing:
@@ -2520,8 +2686,7 @@ def main():
         STEP = STEP_ENV or STEP
         targets = [make_target(slug(f"{g}-{n}"), g, n, **parse_host(h)) for g, n, h, _ in DEMO_TARGETS]
         db = a.db or HERE / "demo.db"
-        for suffix in ("", "-wal", "-shm"):
-            Path(f"{db}{suffix}").unlink(missing_ok=True)
+        reset_db(db)
         t0 = int(time.time())
         init_db(db, a.name)
         probes = {a.name: demo_probes(t0), DEMO_AGENT: demo_probes(t0, remote=True)}

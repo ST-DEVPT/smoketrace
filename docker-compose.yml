@@ -36,6 +36,12 @@ services:
       # (the page then takes over its targets the same way; its agents, round length and pings still apply):
       # SMOKEPING_CONFIG: /etc/smokeping
 
+      # --- the database -----------------------------------------------------------------------------------------
+      # SQLite in /data/smoketrace.db by default: nothing to set up. Or MariaDB (or MySQL), on this host or another:
+      # DB: mariadb://smoketrace@127.0.0.1:3306/smoketrace
+      # DB_PASSWORD: the-database-password     # or in the address: mariadb://smoketrace:password@host/smoketrace
+      # docker-compose.mariadb.yml runs smoketrace with a MariaDB of its own.
+
       # --- remote sites (agents) --------------------------------------------------------------------------------
       # One entry per site: name=token. Make a token with:  openssl rand -hex 24
       # The site then runs docker-compose.agent.yml with that same token in TOKEN.
