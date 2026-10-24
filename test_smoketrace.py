@@ -993,6 +993,107 @@ def test_all_lines_up_its_sites():
             st.BOARD_CACHE.clear()
 
 
+def test_new_releases_are_shown_and_alerted_once():
+    assert st.newer("9.0.0") and not st.newer(st.VERSION) and not st.newer("0.0.1") and not st.newer("v1") and not st.newer(None)
+    assert st.newer("0.10.0", "0.9.9")                                   # numbers, not text
+    assert st.agent_version("smoketrace-agent/0.15.0") == "0.15.0"
+    assert st.agent_version("smoketrace-agent") is None and st.agent_version("smoketrace-agent/<x>") is None
+    sent, saved, saved_post = [], st.ALERTS, st.Alerter.__dict__["post"]
+    st.ALERTS = st.Alerter(webhook="http://127.0.0.1:9/none")
+    st.ALERTS.send = lambda ev: sent.append(ev)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            db = new_db(d, "r.db")
+            st.init_db(db, "local")
+            fetch = lambda: {"version": "9.9.9", "url": "https://github.com/ST-DEVPT/smoketrace/releases/tag/v9.9.9"}
+            st.check_release(db, fetch)
+            st.check_release(db, fetch)                                  # the same release: no second alert
+            st.check_release(db, lambda: {"version": st.VERSION, "url": None})
+            assert [e["title"] for e in sent] == ["smoketrace 9.9.9 is out"] and sent[0]["level"] in st.LEVEL
+            assert st.update_info()["latest"] is None                    # this version again: nothing to show
+            st.check_release(db, fetch)
+            assert len(sent) == 1 and st.update_info()["latest"] == "9.9.9"   # remembered across checks (and restarts)
+            posted = []
+            st.Alerter.post = staticmethod(lambda url, data, headers: posted.append(json.loads(data)))
+            st.ALERTS.discord = "http://127.0.0.1:9/discord"
+            st.ALERTS.deliver({**sent[0], "ts": 0})                      # its colour and its tag exist
+            assert posted and posted[0]["embeds"][0]["title"] == "smoketrace 9.9.9 is out"
+    finally:
+        st.ALERTS = saved
+        st.LATEST.update(version=None, url=None)
+        st.Alerter.post = saved_post
+
+
+def test_the_update_button():
+    """POST /api/update: a password, signed in and JSON, then the updater's webhook with its token."""
+    got, mode = [], {"code": 200, "wait": 0}
+
+    class Updater(BaseHTTPRequestHandler):
+        def do_POST(self):
+            got.append(self.headers.get("Authorization"))
+            time.sleep(mode["wait"])
+            self.send_response(mode["code"])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_):
+            pass
+    up, up_url = serve(Updater)
+    with tempfile.TemporaryDirectory() as d:
+        db, srv, url = server_with(d)
+        saved = st.CONFIG["source"], st.UPDATE_WAIT
+        try:
+            st.CONFIG["source"], st.UPDATE_WAIT = "ini", 0.5
+            st.UPDATE_URL, st.UPDATE_TOKEN = None, "up-token"
+            expect_http(403, lambda: call(url + "/api/update", {"go": 1}))      # no password: nobody restarts it
+            st.PASSWORD = "correct horse"
+            cookie = "smoketrace=" + st.session_value(int(time.time()) + 3600)
+            expect_http(401, lambda: call(url + "/api/update", {"go": 1}))
+
+            def post(ctype="application/json"):
+                req = urllib.request.Request(url + "/api/update", data=b"{}", headers={"Cookie": cookie, "Content-Type": ctype})
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return json.load(r)
+            expect_http(403, lambda: post("text/plain"))
+            expect_http(404, post)                                               # no UPDATE_URL
+            st.UPDATE_URL = up_url + "/v1/update"
+            assert post()["ok"] and got == ["Bearer up-token"]
+            mode.update(wait=2)                                                  # restarts us before it answers
+            assert post()["ok"] and len(got) == 2
+            mode.update(wait=0, code=500)
+            assert "500" in json.loads(expect_http(502, post).read())["error"]
+            st.UPDATE_URL, st.UPDATE_WAIT = "http://127.0.0.1:9/nothing", 5      # nobody there (Windows takes ~2 s to say so)
+            assert "reach" in json.loads(expect_http(502, post).read())["error"]
+            assert call(url + "/api/version", cookie=cookie)["version"] == st.VERSION
+        finally:
+            st.CONFIG["source"], st.UPDATE_WAIT = saved
+            st.PASSWORD = st.UPDATE_URL = st.UPDATE_TOKEN = None
+            srv.shutdown()
+            srv.server_close()
+            up.shutdown()
+            up.server_close()
+
+
+def test_agents_say_their_version():
+    with tempfile.TemporaryDirectory() as d:
+        db, srv, url = server_with(d)
+        try:
+            st.LATEST.update(version="9.9.9")
+            assert call(url + "/api/agent/targets")["latest"] == "9.9.9"      # an agent logs that it is behind
+            now = int(time.time())
+            req = urllib.request.Request(url + "/api/agent/push", data=json.dumps({"ts": now, "pings": {"t": [1.0]}}).encode(),
+                                         headers={"Authorization": f"Bearer {TOKEN}", "User-Agent": "smoketrace-agent/0.15.0"})
+            urllib.request.urlopen(req, timeout=5).close()
+            call(url + "/api/agent/push", {"ts": now, "pings": {"u": [1.0]}}, token="office-" + TOKEN)   # urllib's agent
+            runs = {s["name"]: s["runs"] for s in call(url + "/api/sites")["sites"]}
+            assert runs == {"local": st.VERSION, "porto": "0.15.0", "office": None}, runs
+        finally:
+            st.LATEST.update(version=None)
+            st.AGENT_VERSIONS.clear()
+            srv.shutdown()
+            srv.server_close()
+
+
 def test_a_stale_board_is_served_while_a_new_one_is_made():
     with tempfile.TemporaryDirectory() as d:
         db, srv, url = server_with(d)
@@ -1129,7 +1230,7 @@ def test_pull_round_trip():
             ticks[0](now + 300)
             st.pull_agent(db, "office", agent)                 # the server takes it and acknowledges it
             with st.db_open(db) as c:
-                rows = c.execute("SELECT source, target, ts, median FROM ping ORDER BY target").fetchall()
+                rows = c.execute("SELECT source, target, ts, median FROM ping ORDER BY target, ts").fetchall()
             assert rows == [("office", "t", now, 7.0), ("office", "t", now + 300, 7.0), ("office", "u", now, 7.0),
                             ("office", "u", now + 300, 7.0)], rows
             assert st.PULL_ACK["office"] == now + 300

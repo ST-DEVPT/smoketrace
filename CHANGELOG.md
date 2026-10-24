@@ -2,6 +2,23 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.15.0] - 2026-10-24
+
+- **New versions are announced.** Every 6 hours the server asks GitHub for the latest release. When it is newer,
+  the sidebar says so (with a dot on the menu button on phones), with what changed and how to update, for the
+  server and for every site; one alert goes out per version (Discord, ntfy, webhook), remembered across restarts;
+  agents log it. `UPDATE_CHECK=0` turns the check off.
+- **Update from the page.** With `UPDATE_URL` (an updater's webhook: a Portainer or Komodo stack webhook, or any
+  updater's HTTP API) and `PASSWORD`, an **Update** button asks the updater, waits for the new version to answer
+  and reloads the page. smoketrace is never given the Docker socket.
+- **Every site's version** on the Sites page, marked when it is not on the server's (agents now say their
+  version; older ones show none).
+- **A review of the page in every style** (dark and light, English and Portuguese, 390, 768 and 1440 px), measured,
+  not eyeballed: no sideways scroll and no clipped text anywhere; every text now reaches 4.5:1 contrast (the light
+  theme's secondary grey and warning amber were 3.8 to 4.4); every control that stands alone is at least 24 px
+  (table headers, Edit, the sidebar's buttons); "Sign out" no longer breaks over two lines; the update commands
+  wrap instead of hiding their end. Every keyboard stop shows its focus.
+
 ## [0.14.1] - 2026-10-24
 
 A review of the whole project; what it found:

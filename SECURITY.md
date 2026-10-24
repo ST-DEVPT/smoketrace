@@ -6,7 +6,8 @@ their history. With it, the dashboard and its API need a sign-in: a session cook
 days; changing the password ends every session. A wrong password costs a second, and any sign-in in the second
 after one is answered 429 without being checked, so guesses go one a second however many are sent at once (in
 a flood of guesses you may have to try again). `/metrics` then needs `METRICS_TOKEN`. Three things write: an
-agent's round, which needs the agent's token, the Targets page and the Sites page.
+agent's round, which needs the agent's token, the Targets page and the Sites page; and the Update button asks
+the updater to restart it.
 
 - The image listens on every interface (`BIND=0.0.0.0`); outside Docker it listens on `127.0.0.1` unless told
   otherwise. Keep it on a trusted network, or put it behind a reverse proxy with authentication.
@@ -22,7 +23,10 @@ agent's round, which needs the agent's token, the Targets page and the Sites pag
   field is checked as a target from a file is, and the list is written whole and swapped in.
 - **Outside services**: each site asks Google's name servers for its own public address once an hour (one DNS
   question), and AS numbers, their names and the site's network come from Team Cymru over DNS. `ASN=0` turns
-  all of it off. Nothing else leaves the server except what you configure (alerts, agents).
+  all of it off. Every 6 hours the server asks GitHub for its latest release (`UPDATE_CHECK=0` turns that off;
+  agents never ask). Nothing else leaves the server except what you configure (alerts, agents, `UPDATE_URL`).
+- **Updates from the page** go through an updater you run (`UPDATE_URL`); smoketrace is never given the Docker
+  socket. The Update button needs `PASSWORD` and a sign-in, like the edits, since it restarts the server.
 - **MariaDB**: its password can stay out of the address, in `DB_PASSWORD`. The image installs one package,
   PyMySQL, pinned by hash in `requirements.txt`, as the base image is pinned by digest.
 - A host that could be read as a command-line option is refused, wherever the target comes from (the page,

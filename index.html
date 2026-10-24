@@ -28,9 +28,9 @@
   color-scheme: light;
   --bg: #f2f0eb; --panel: #faf9f6; --panel-2: #ebe8e1; --panel-3: #e0dcd2; --hover: rgba(23, 23, 23, .04);
   --line: #dedad1; --line-2: #c7c2b6;
-  --ink: #171717; --ink-2: #4f4d48; --ink-3: #6b6860;
+  --ink: #171717; --ink-2: #4f4d48; --ink-3: #625f58;
   --brand: #c2410c; --accent: #2c6b8a; --accent-soft: rgba(44, 107, 138, .08); --on-bad: #ffffff;
-  --ok: #3b7a39; --warn: #a66f00; --crit: #cc5f0c; --down: #c0301c; --stale: #a9a499;
+  --ok: #3b7a39; --warn: #8a5c00; --crit: #cc5f0c; --down: #c0301c; --stale: #a9a499;
   --cell-ok: #c3d6b6; --cell-none: #b9b4a8; --lat-0: #dbd7cd; --sel: rgba(44, 107, 138, .22); --lat-1: #d9a21b; --lat-2: #c0301c;
   --route-1: #2c6b8a; --route-2: #6d4bb0; --route-3: #1d7a5f; --route-x: #8a867d;
   --src-2: #b0436f; --src-3: #8a7210;
@@ -92,6 +92,17 @@ a.node { text-decoration: none; }
 .side-foot button:hover { border-color: var(--ink-3); color: var(--ink); }
 .linkish { border: 0; background: none; padding: 0; font-size: 12px; color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; }
 #tree + .side-foot { margin-top: auto; }
+.upd { margin: auto 0 0; padding: 12px 10px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
+.upd + .side-foot { margin-top: 0; }
+.side-menu.has-upd::after { content: ""; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--accent); }
+.upd b { display: block; margin-bottom: 6px; font-weight: 600; color: var(--ink); }
+.upd b::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
+.upd .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.upd .btn { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.upd p { margin: 8px 0 0; }
+.cmd { display: flex; align-items: center; gap: 8px; margin: 8px 0 14px; padding: 8px 8px 8px 12px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg); }
+.cmd code { flex: 1; min-width: 0; overflow-wrap: anywhere; font: 12.5px/1.5 "Plex Mono", ui-monospace, monospace; }
+.cmd .btn { height: 28px; padding: 0 10px; font-size: 12px; }
 .side > #tree { margin-bottom: 18px; }
 .main { min-width: 0; width: 100%; max-width: 1600px; padding: 30px 36px 64px; }
 .offline-banner { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; padding: 9px 13px; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
@@ -154,7 +165,7 @@ button.kpi[aria-pressed="true"] .cap { color: var(--ink); font-weight: 600; }
 .seg { display: inline-flex; flex: none; border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; }
 .seg button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; padding: 4px 11px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
 .seg button + button { border-left: 1px solid var(--line-2); }
-.seg .cc { margin-left: 5px; font: 10.5px "Plex Mono", monospace; opacity: .7; }
+.seg .cc { margin-left: 5px; font: 10.5px "Plex Mono", monospace; opacity: .85; }
 .seg button:hover { color: var(--ink); }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
 .fbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
@@ -193,7 +204,7 @@ th, td { height: 44px; padding: 0 12px; text-align: left; white-space: nowrap; b
 th:first-child, td:first-child { padding-left: 0; }
 th:last-child, td:last-child { padding-right: 0; }
 thead th { position: sticky; top: 0; z-index: 1; height: 32px; background: var(--bg); border-bottom-color: var(--line-2); }
-thead th button { all: unset; cursor: pointer; font-size: 12px; font-weight: 500; color: var(--ink-3); }
+thead th button { all: unset; display: inline-flex; align-items: center; min-height: 24px; min-width: 24px; cursor: pointer; font-size: 12px; font-weight: 500; color: var(--ink-3); }
 thead th button:hover, thead th button[aria-pressed="true"] { color: var(--ink); }
 th.num, td.num { text-align: right; }
 tbody tr[data-open] { cursor: pointer; }
@@ -233,7 +244,7 @@ td .sub { display: block; font: 11.5px "Plex Mono", monospace; color: var(--ink-
 .alert { display: flex; gap: 10px; margin-bottom: 14px; padding: 11px 13px; border: 1px solid var(--c); border-radius: 8px; background: color-mix(in srgb, var(--c) 8%, transparent); font-size: 13px; color: var(--ink-2); }
 .alert .ic { margin-top: 3px; }
 .alert b { display: block; margin-bottom: 2px; font-weight: 600; color: var(--ink); }
-.alert button { all: unset; display: inline-block; margin-top: 4px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; color: var(--ink); }
+.alert button { all: unset; display: inline-flex; align-items: center; min-height: 24px; margin-top: 2px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; color: var(--ink); }
 .prob { display: block; width: 100%; padding: 10px 0; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; color: inherit; }
 .pb > .prob:first-of-type { border-top: 1px solid var(--line); }
 .prob:hover .nm { text-decoration: underline; text-underline-offset: 3px; }
@@ -333,11 +344,16 @@ details .tw { max-height: 420px; overflow: auto; margin-bottom: 18px; }
 dialog.tdlg { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--ink); }
 dialog.tdlg::backdrop { background: rgb(0 0 0 / .45); }
 dialog.tdlg .tform { margin: 0; box-shadow: 0 18px 50px rgb(0 0 0 / .35); }
-td.act .link, .card .ft .link { font-size: 12.5px; }
+td.act .link, .card .ft .link { display: inline-flex; align-items: center; min-height: 24px; min-width: 24px; font-size: 12.5px; }
+.rail .link, .upd .linkish, .side-foot .ver, .side-foot #out { display: inline-flex; align-items: center; min-height: 24px; }
+.side-foot button:not(.linkish) { min-height: 24px; }
+.side-foot #out { white-space: nowrap; min-width: 24px; justify-content: center; }
+.crumbs a { display: inline-flex; align-items: center; min-height: 24px; }
 table.tlist td { height: 44px; }
 table.tlist td.act { width: 1%; text-align: right; }
 table.slist td { height: 52px; vertical-align: middle; }
 table.slist tr[aria-current="true"] td { background: var(--panel); }
+table.slist .old { display: inline-flex; align-items: center; gap: 5px; color: var(--warn); }
 table.slist .sub { margin-top: 2px; font: 12px "Archivo", "Helvetica Neue", Helvetica, sans-serif; color: var(--ink-3); }
 table.slist .mono .sub { font-family: "Plex Mono", ui-monospace, Menlo, Consolas, monospace; }
 .tnav { display: grid; gap: 1px; margin-bottom: 4px; }
@@ -363,8 +379,9 @@ table.slist .mono .sub { font-family: "Plex Mono", ui-monospace, Menlo, Consolas
   .side-menu { display: inline-flex; }
   .search { margin: 0; }
   .search kbd { display: none; }
-  #tree, .side-foot { display: none; }
+  #tree, .side-foot, .upd { display: none; }
   body.drawer #tree { display: grid; margin: 10px 0 0; }
+  body.drawer .upd:not([hidden]) { display: block; margin-top: 12px; }
   body.drawer .side-foot { display: flex; margin-top: 12px; }
   .main { padding: 20px 16px 48px; }
   .page-head h1 { font-size: 28px; }
@@ -398,6 +415,7 @@ table.slist .mono .sub { font-family: "Plex Mono", ui-monospace, Menlo, Consolas
   </div>
   <label class="search"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m11 11 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input id="q" type="search" autocomplete="off" spellcheck="false" aria-label="Search"><kbd>/</kbd></label>
   <nav id="tree" aria-label="Groups"></nav>
+  <div class="upd" id="upd" hidden></div>
   <div class="side-foot"><a id="ver" class="ver" target="_blank" rel="noopener" hidden></a><button data-act="lang" id="lang"></button><button data-act="theme" id="themeBtn"></button><span class="grow"></span><a class="linkish" id="out" href="/logout" hidden></a></div>
 </aside>
 <main class="main">
@@ -406,6 +424,7 @@ table.slist .mono .sub { font-family: "Plex Mono", ui-monospace, Menlo, Consolas
 </main>
 <div class="tip" id="tip" hidden></div>
 <dialog class="tdlg" id="tdlg"></dialog>
+<dialog class="tdlg" id="udlg"></dialog>
 
 <script>
 "use strict";
@@ -471,6 +490,13 @@ const I18N = {
     notFoundT: "Target not found", notFoundB: 'It may have been removed from the config. <a href="#/">Back to the dashboard</a>',
     signOut: "Sign out", langBtn: "PT", langTitle: "Português", themeDark: "Dark", themeLight: "Light", keys: "← → Enter",
     chartLbl: (n, a, b, c) => `Latency of ${n}: median between ${a} and ${b}; route: ${c}. A data table is below.`,
+    uAvail: v => `v${v} is out`, uNotes: "What changed", uNow: "Update", uHow: "How to update", uTitle: v => `Update to v${v}`,
+    uLede: (v, c) => `This server runs v${c}. Run this where its docker-compose.yml is:`,
+    uAgents: "And at every site, so agents stay on the server's version:", uCopy: "Copy", uCopied: "Copied",
+    uHook: "Set UPDATE_URL to an updater's webhook (a Portainer or Komodo stack webhook, or any updater's HTTP API) and the Update button does this for the server.",
+    uAsked: v => `Update to v${v} asked for. The page reloads when the new version answers.`,
+    uSlow: "No new version after 5 minutes: check the updater's log.", uFail: e => `The update was not asked for: ${e}`,
+    uClose: "Close", sVer: "Version", sOld: v => `Not on the server's version (v${v}): update this site`, sNoVer: "older than 0.15",
     noReply: "No reply", releaseNotes: "What changed in this version",
     sitesNav: "Sites", sSite: "Site", sKind: "Kind", sIp: "Public address", sNet: "Network", sCountry: "Country", sPlace: "Place",
     sCount: n => pl(n, "site", "sites"), sLast: "Last round", sTargets: "Targets", sNote: "Note", sProvider: "Provider",
@@ -563,6 +589,13 @@ const I18N = {
     notFoundT: "Alvo não encontrado", notFoundB: 'Pode ter sido removido da config. <a href="#/">Voltar ao painel</a>',
     signOut: "Sair", langBtn: "EN", langTitle: "English", themeDark: "Escuro", themeLight: "Claro", keys: "← → Enter",
     chartLbl: (n, a, b, c) => `Latência de ${n}: mediana entre ${a} e ${b}; rota: ${c}. Tabela de dados disponível abaixo.`,
+    uAvail: v => `Saiu a v${v}`, uNotes: "O que mudou", uNow: "Atualizar", uHow: "Como atualizar", uTitle: v => `Atualizar para a v${v}`,
+    uLede: (v, c) => `Este servidor está na v${c}. Corra isto onde está o docker-compose.yml:`,
+    uAgents: "E em cada local, para os agentes ficarem na versão do servidor:", uCopy: "Copiar", uCopied: "Copiado",
+    uHook: "Defina UPDATE_URL com o webhook de um atualizador (webhook de uma stack do Portainer ou do Komodo, ou a API HTTP de qualquer atualizador) e o botão Atualizar faz isto no servidor.",
+    uAsked: v => `Atualização para a v${v} pedida. A página recarrega quando a nova versão responder.`,
+    uSlow: "Sem versão nova ao fim de 5 minutos: veja o log do atualizador.", uFail: e => `A atualização não foi pedida: ${e}`,
+    uClose: "Fechar", sVer: "Versão", sOld: v => `Não está na versão do servidor (v${v}): atualize este local`, sNoVer: "anterior à 0.15",
     noReply: "Sem resposta", releaseNotes: "O que mudou nesta versão",
     sitesNav: "Locais", sSite: "Local", sKind: "Tipo", sIp: "Endereço público", sNet: "Rede", sCountry: "País", sPlace: "Sítio",
     sCount: n => pl(n, "local", "locais"), sLast: "Última ronda", sTargets: "Alvos", sNote: "Nota", sProvider: "Operador",
@@ -711,10 +744,50 @@ async function loadBoard() {
     ver.hidden = false; ver.textContent = "v" + S.b.version; ver.title = t("releaseNotes");
     ver.href = `https://github.com/ST-DEVPT/smoketrace/releases/tag/v${S.b.version}`;
   }
+  renderUpd();
   renderSide(); favicon();
   if (!S.id && !S.tpage) renderDash();
   if (S.tpage) renderSide();
 }
+// ---------- a newer release: say so, and update when an updater is set ----------
+const UP = { asked: null, at: 0, msg: "" };       // asked: the version the page asked to go to
+function renderUpd() {
+  const el = $("#upd"), v = S.b?.latest;
+  el.hidden = !v && !UP.msg;
+  $("#menuBtn").classList.toggle("has-upd", !!v);
+  $("#menuBtn").title = v ? t("uAvail", v) : "";
+  if (el.hidden) return;
+  el.innerHTML = v ? `<b>${t("uAvail", esc(v))}</b><div class="row">
+      ${S.b.can_update ? `<button class="btn primary" data-act="update" ${UP.asked ? "disabled" : ""}>${t("uNow")}</button>` : ""}
+      <button class="linkish" data-act="uhow">${t("uHow")}</button>
+      ${S.b.latest_url ? `<a class="linkish" href="${esc(S.b.latest_url)}" target="_blank" rel="noopener">${t("uNotes")}</a>` : ""}</div>
+      ${UP.msg ? `<p role="status">${esc(UP.msg)}</p>` : ""}` : `<p role="status">${esc(UP.msg)}</p>`;
+}
+function updDialog() {
+  const d = $("#udlg"), v = S.b.latest;
+  const cmd = c => `<div class="cmd"><code>${esc(c)}</code><button class="btn" type="button" data-copy="${esc(c)}">${t("uCopy")}</button></div>`;
+  d.innerHTML = `<div class="tform"><h2>${t("uTitle", esc(v))}</h2>
+    <p class="hint">${t("uLede", esc(v), esc(S.b.version))}</p>${cmd("docker compose pull && docker compose up -d")}
+    <p class="hint">${t("uAgents")}</p>${cmd("docker compose -f docker-compose.agent.yml pull && docker compose -f docker-compose.agent.yml up -d")}
+    ${S.b.can_update ? "" : `<p class="hint">${t("uHook")}</p>`}
+    <div class="factions">${S.b.latest_url ? `<a class="btn" href="${esc(S.b.latest_url)}" target="_blank" rel="noopener">${t("uNotes")}</a>` : ""}
+      <span class="grow"></span><button class="btn" type="button" data-act="uclose">${t("uClose")}</button></div></div>`;
+  if (!d.open) d.showModal();
+}
+async function askUpdate() {
+  const from = S.b.version, to = S.b.latest;
+  UP.asked = to; UP.msg = ""; renderUpd();
+  try { await postJSON("/api/update", {}); }
+  catch (e) { UP.asked = null; UP.msg = e.message === "sign in" ? "" : t("uFail", e.message); renderUpd(); return; }
+  UP.msg = t("uAsked", to); UP.at = Date.now(); renderUpd();
+  const poll = async () => {             // the server goes away and comes back as the new version
+    try { const r = await api("/api/version"); if (r.version !== from) { location.reload(); return; } } catch (e) { /* restarting */ }
+    if (Date.now() - UP.at > 300000) { UP.asked = null; UP.msg = t("uSlow"); renderUpd(); return; }
+    setTimeout(poll, 4000);
+  };
+  setTimeout(poll, 4000);
+}
+
 async function refresh() {
   await loadBoard();
   if (S.id) await loadDetail();
@@ -1002,16 +1075,18 @@ function renderSites() {
   const kind = s => s.kind === "local" ? t("sLocal") : s.kind === "pull" ? t("sPull") : t("sPush");
   const last = s => !s.last_ts ? dim("—") : `${d.now - s.last_ts > 3 * d.step ? icon("stale") + " " : ""}${ago(d.now - s.last_ts)}`;
   const net = s => s.network ? `${esc(s.network)}${s.asn ? ` <span class="dim mono">${esc(s.asn)}</span>` : ""}` : dim("—");
+  const ver = s => !s.runs ? `<span class="dim" title="${t("sNoVer")}">—</span>`
+    : s.runs === d.version ? esc(s.runs) : `<span class="old" title="${t("sOld", esc(d.version))}">${icon("warn")} ${esc(s.runs)}</span>`;
   const rows = d.sites.map(s => `<tr${SI.edit === s.name ? ' aria-current="true"' : ""}><td><span class="nm">${esc(s.name)}</span><div class="sub">${esc(kind(s))}</div></td>
       <td class="${s.ip ? "mono" : ""}">${s.ip ? esc(s.ip) : `<span class="dim" title="${t("sNoIp")}">${t("sNone")}</span>`}${s.prefix ? `<div class="sub">${esc(s.prefix)}</div>` : ""}</td>
       <td>${net(s)}</td><td class="mono">${s.cc ? esc(s.cc) : dim("—")}</td>
       <td>${s.place ? esc(s.place) : dim("—")}${s.note ? `<div class="sub">${esc(s.note)}</div>` : ""}</td>
-      <td class="hide-s muted">${last(s)}</td><td class="hide-s num">${s.targets}</td>
+      <td class="hide-s muted">${last(s)}</td><td class="hide-s mono">${ver(s)}</td><td class="hide-s num">${s.targets}</td>
       <td class="act">${d.editable ? `<button class="link" data-sedit="${esc(s.name)}">${t("tEdit")}</button>` : ""}</td></tr>`).join("");
   v.innerHTML = head(lede) + (SI.edit ? siteForm(d.sites.find(s => s.name === SI.edit)) : "")
     + `<div class="ttools"><span class="count">${t("sCount", d.sites.length)}</span><span class="grow"></span>${SI.saved ? `<span class="count">${esc(SI.saved)}</span>` : ""}</div>
     <div class="tw"><table class="tlist slist"><thead><tr><th>${t("sSite")}</th><th>${t("sIp")}</th><th>${t("sNet")}</th><th>${t("sCountry")}</th>
-      <th>${t("sPlace")}</th><th class="hide-s">${t("sLast")}</th><th class="hide-s num">${t("sTargets")}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      <th>${t("sPlace")}</th><th class="hide-s">${t("sLast")}</th><th class="hide-s">${t("sVer")}</th><th class="hide-s num">${t("sTargets")}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
   if (SI.edit) $("#sform [name=place]")?.focus();
 }
 function siteForm(s) {
@@ -1883,7 +1958,7 @@ function renderRaw() {
 // the button shows the choice at once; the data follows when it arrives
 const pressOnly = (k, v) => document.querySelectorAll(`[data-${k}]`).forEach(b => b.setAttribute("aria-pressed", String(b.dataset[k]) === String(v)));
 document.addEventListener("click", e => {
-  const b = e.target.closest("[data-tedit],[data-sedit],[data-tog],[data-act],[data-src],[data-brange],[data-drange],[data-view],[data-mode],[data-tl],[data-vs],[data-fst],[data-fp],[data-frc],[data-st],[data-rc],[data-g],[data-sortk],[data-ids],[data-here],[data-open]");
+  const b = e.target.closest("[data-tedit],[data-sedit],[data-copy],[data-tog],[data-act],[data-src],[data-brange],[data-drange],[data-view],[data-mode],[data-tl],[data-vs],[data-fst],[data-fp],[data-frc],[data-st],[data-rc],[data-g],[data-sortk],[data-ids],[data-here],[data-open]");
   if (!b) { if (document.body.classList.contains("drawer") && !e.target.closest(".side")) document.body.classList.remove("drawer"); return; }
   const ds = b.dataset;
   if (ds.tog != null) { S.open.has(ds.tog) ? S.open.delete(ds.tog) : S.open.add(ds.tog); store.set("treeOpen", JSON.stringify([...S.open])); renderSide(); return; }
@@ -1898,6 +1973,10 @@ document.addEventListener("click", e => {
   if (ds.tedit) { editTarget(ds.tedit); return; }
   if (ds.sedit) { SI.edit = ds.sedit; SI.saved = ""; renderSites(); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
   if (ds.act === "scancel") { SI.edit = null; renderSites(); return; }
+  if (ds.act === "update") { askUpdate(); return; }
+  if (ds.act === "uhow") { updDialog(); return; }
+  if (ds.act === "uclose") { $("#udlg").close(); return; }
+  if (ds.copy != null) { navigator.clipboard?.writeText(ds.copy).then(() => { b.textContent = t("uCopied"); setTimeout(() => { b.textContent = t("uCopy"); }, 1500); }); return; }
   if (ds.act === "sreload") { loadSites(); return; }
   if (ds.act === "clearq") { $("#q").value = ""; setFilters(f => { f.q = ""; }); return; }
   if (ds.act === "clearids") { setFilters(f => { f.ids.clear(); }); return; }
@@ -1983,6 +2062,7 @@ let qTimer = 0;
 $("#q").addEventListener("input", e => { clearTimeout(qTimer); qTimer = setTimeout(() => setFilters(f => { f.q = e.target.value; }), 150); });
 $("#tdlg").addEventListener("close", () => { TG.edit = null; });
 $("#tdlg").addEventListener("click", e => { if (e.target.id === "tdlg") closeEditor(); });   // the backdrop
+$("#udlg").addEventListener("click", e => { if (e.target.id === "udlg") $("#udlg").close(); });
 document.addEventListener("keydown", e => {
   if ($("#tdlg").open) return;
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);

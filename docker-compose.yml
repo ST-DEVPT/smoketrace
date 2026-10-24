@@ -56,6 +56,13 @@ services:
       # LOSS_WARN: "10"           # % lost in a round for a warning (2 of 20 pings)
       # LOSS_CRIT: "20"           # % lost in a round for critical (4 of 20 pings)
 
+      # --- updates -------------------------------------------------------------------------------------------
+      # The page says when a new version is out (asked of GitHub every 6 h) and alerts it once. Its Update button
+      # calls an updater you run (a Portainer or Komodo stack webhook, or any updater's HTTP API):
+      # UPDATE_URL: https://portainer.lan:9443/api/stacks/webhooks/your-webhook-id
+      # UPDATE_TOKEN: the-updater-token          # sent as a bearer token, if the updater wants one
+      # UPDATE_CHECK: "0"                        # never ask GitHub
+
       # --- Prometheus ------------------------------------------------------------------------------------------
       # METRICS_TOKEN: another-long-random-token   # /metrics then needs it as a bearer token
 

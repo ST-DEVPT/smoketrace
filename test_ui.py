@@ -183,6 +183,8 @@ with sync_playwright() as p:
     pg.reload()
     pg.wait_for_selector("table.slist tbody tr")
     check("a reload stays on the sites page", pg.evaluate("[S.tpage, location.hash]") == ["sites", "#/sites"])
+    r = pg.evaluate("[[...document.querySelectorAll('table.slist thead th')].map(th => th.innerText).includes(t('sVer')), document.querySelector('table.slist tbody tr').innerText.includes(S.b.version), $('#upd').hidden]")
+    check("each site's version shows, and no update notice when none is out", r == [True, True, True], r)
     pg.click(".side [data-g='']")
     pg.wait_for_function("!S.tpage && document.querySelector('#hm')")
     check("the overview comes back from the sites page", pg.evaluate("[S.tpage, S.view]") == [False, "heat"])

@@ -16,6 +16,7 @@ Every flag also reads an environment variable; README.md lists them.
 """
 import argparse
 import gzip
+import http.client
 import base64
 import bisect
 import configparser
@@ -50,7 +51,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-VERSION = "0.14.1"           # the top of CHANGELOG.md says the same; a test checks
+VERSION = "0.15.0"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
@@ -80,6 +81,10 @@ ASN_RE = re.compile(r"AS\d{1,10}")
 # set by main() from the environment
 PASSWORD = METRICS_TOKEN = PUBLIC_URL = None
 ASN_LOOKUP = True
+UPDATE_CHECK = True         # ask GitHub every 6 h whether a newer release is out (UPDATE_CHECK=0: never)
+UPDATE_URL = UPDATE_TOKEN = None    # an updater's webhook the page's Update button calls (Portainer, Komodo, ...)
+REPO = "ST-DEVPT/smoketrace"
+VERSION_RE = re.compile(r"\d{1,4}\.\d{1,5}\.\d{1,6}")
 
 
 def log(msg):
@@ -834,6 +839,94 @@ def asn_namer(path):
         time.sleep(60)
 
 
+# ---------- new releases ----------
+
+LATEST = {"version": None, "url": None, "at": 0}    # the newest release on GitHub, as last asked
+UPDATE_WAIT = 5                                     # seconds the updater has to answer before it counts as asked
+AGENT_VERSIONS = {}                                 # agent -> the version it last said it runs
+
+
+def vtuple(v):
+    return tuple(int(x) for x in v.split("."))
+
+
+def newer(v, than=None):
+    """Is v a version above `than` (this one)?"""
+    return bool(isinstance(v, str) and VERSION_RE.fullmatch(v)) and vtuple(v) > vtuple(than or VERSION)
+
+
+def fetch_latest():
+    """The newest published release (drafts and pre-releases are not "latest"): {version, url}."""
+    req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
+                                 headers={"User-Agent": f"smoketrace/{VERSION}", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        d = json.load(r)
+    v = str(d.get("tag_name", "")).removeprefix("v")
+    if not VERSION_RE.fullmatch(v):
+        raise ValueError(f"tag {d.get('tag_name')!r} is not a version")
+    url = str(d.get("html_url") or "")
+    return {"version": v, "url": url if url.startswith("https://github.com/") else None}
+
+
+def check_release(path, fetch=fetch_latest, now=None):
+    """One look for a newer release: kept for the page, and alerted once per version (remembered in the database,
+    so a restart does not alert it again)."""
+    got = fetch()
+    LATEST.update(got, at=now or time.time())
+    if not newer(got["version"]):
+        return
+    with db_open(path) as db:
+        row = db.execute("SELECT v FROM meta WHERE k='alerted_release'").fetchone()
+        if row and row[0] == got["version"]:
+            return
+        db.execute("INSERT OR REPLACE INTO meta VALUES ('alerted_release', ?)", (got["version"],))
+    log(f"smoketrace {got['version']} is out (this server runs {VERSION})")
+    if ALERTS.enabled():
+        ALERTS.send({"kind": "release", "level": "release", "source": Handler.sources[0], "target": None,
+                     "title": f"smoketrace {got['version']} is out", "url": got["url"] or PUBLIC_URL,
+                     "lines": [f"This server runs {VERSION}.", "Update: docker compose pull && docker compose up -d "
+                               "(on the server and at every site)"]})
+
+
+def release_checker(path):
+    failing = False
+    while True:
+        try:
+            check_release(path)
+            failing = False
+        except Exception as e:
+            if not failing:             # once, not every 6 hours
+                log(f"cannot check for a new release: {e}")
+            failing = True
+        time.sleep(6 * 3600)
+
+
+def agent_version(user_agent):
+    """'smoketrace-agent/0.15.0' -> '0.15.0'; an agent older than 0.15 says no version."""
+    m = re.fullmatch(r"smoketrace-agent/(\S{1,20})", user_agent or "")
+    return m[1] if m and VERSION_RE.fullmatch(m[1]) else None
+
+
+def request_update():
+    """Ask the updater to update (its webhook, UPDATE_URL). -> (asked, what it said). An updater that restarts this
+    container before it answers is the usual case: no answer within a few seconds counts as asked."""
+    headers = {"User-Agent": f"smoketrace/{VERSION}", "Content-Type": "application/json"}
+    if UPDATE_TOKEN:
+        headers["Authorization"] = f"Bearer {UPDATE_TOKEN}"
+    req = urllib.request.Request(UPDATE_URL, data=b"{}", headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=UPDATE_WAIT) as r:
+            return True, f"the updater answered {r.status}"
+    except urllib.error.HTTPError as e:
+        return False, f"the updater answered {e.code} {e.reason}"
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, (TimeoutError, ConnectionResetError)):
+            return True, "asked; no answer yet"
+        return False, f"cannot reach the updater: {e.reason}"
+    except (TimeoutError, ConnectionResetError, http.client.RemoteDisconnected):
+        return True, "asked; no answer yet"
+
+
 # ---------- route logic ----------
 
 def path_of(hops):
@@ -1053,7 +1146,7 @@ def agent_targets(got):
 
 # ---------- storage ----------
 
-TABLES = ("ping", "trace", "path", "asn", "rounds", "site")
+TABLES = ("ping", "trace", "path", "asn", "rounds", "site", "meta")
 MARIADB_IDLE = {}           # url -> connections kept for the next db_open (they cost a TCP handshake and a login)
 MARIADB_LOCK = threading.Lock()
 MARIADB_KEEP = 8            # idle connections kept per database at most
@@ -1170,7 +1263,8 @@ def copy_db(src, dst):
         while True:                   # a primary key's worth at a time: a month of traces does not fit in memory
             with db_open(src) as s:
                 cols = [d[0] for d in s.execute(f"SELECT * FROM {t} LIMIT 0").description]
-                keys = {"asn": ["asn"], "site": ["name"], "rounds": ["source", "ts"]}.get(t, ["source", "target", "ts"])
+                keys = {"asn": ["asn"], "site": ["name"], "meta": ["k"], "rounds": ["source", "ts"]}.get(
+                    t, ["source", "target", "ts"])
                 where = f"WHERE ({', '.join(keys)}) > ({', '.join('?' * len(keys))}) " if after else ""
                 rows = s.execute(f"SELECT {', '.join(cols)} FROM {t} {where}ORDER BY {', '.join(keys)} LIMIT 5000",
                                  after or ()).fetchall()
@@ -1195,6 +1289,7 @@ MARIADB_SCHEMA = (   # the SQLite tables below, with lengths: NAME_RE, ID_RE and
     "CREATE TABLE IF NOT EXISTS rounds (source VARCHAR(32) NOT NULL, ts BIGINT NOT NULL, PRIMARY KEY (source, ts))",
     "CREATE TABLE IF NOT EXISTS site (name VARCHAR(32) NOT NULL PRIMARY KEY, ip VARCHAR(45), asn VARCHAR(16),"
     " prefix VARCHAR(64), cc VARCHAR(8), place VARCHAR(255), country VARCHAR(8), provider VARCHAR(255), note TEXT)",
+    "CREATE TABLE IF NOT EXISTS meta (k VARCHAR(64) NOT NULL PRIMARY KEY, v TEXT)",
 )
 
 
@@ -1226,6 +1321,8 @@ def init_db(path, source):
         # where it is as typed in on the Sites page (place, country, provider, note: these win over what was found)
         db.execute("CREATE TABLE IF NOT EXISTS site (name TEXT PRIMARY KEY, ip TEXT, asn TEXT, prefix TEXT, cc TEXT,"
                    " place TEXT, country TEXT, provider TEXT, note TEXT) WITHOUT ROWID")
+        # the server's own small state: the last release it alerted
+        db.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID")
         if old and "source" not in old:
             db.execute("INSERT INTO ping SELECT ?, * FROM ping_v1", (source,))
             db.execute("INSERT INTO trace (source, target, ts, hops) SELECT ?, * FROM trace_v1", (source,))
@@ -1403,12 +1500,12 @@ def run_agent(server, token, ping_fn, trace_fn):
     def call(path, body=None):
         req = urllib.request.Request(server + path, data=body and json.dumps(body).encode(),
                                      headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
-                                              "User-Agent": "smoketrace-agent"})
+                                              "User-Agent": f"smoketrace-agent/{VERSION}"})
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r)
 
     backlog = deque(maxlen=AGENT_BACKLOG)   # ponytail: in memory, lost on restart; a file if that ever matters
-    targets, lossy = [], Lossy()
+    targets, lossy, told = [], Lossy(), {}
 
     def one(ts):
         nonlocal targets
@@ -1416,6 +1513,9 @@ def run_agent(server, token, ping_fn, trace_fn):
             got = call("/api/agent/targets")
             targets = agent_targets(got["targets"])
             take_steps(got)                 # the primary decides
+            if newer(got.get("latest")) and told.get("v") != got["latest"]:
+                told["v"] = got["latest"]
+                log(f"smoketrace {got['latest']} is out; this agent runs {VERSION}: docker compose pull && docker compose up -d")
         except Exception as e:
             log(f"cannot fetch targets from {server}: {e}" + (" (using the last list)" if targets else ""))
         if targets:
@@ -1467,7 +1567,8 @@ def run_listener(listen, token, ping_fn, trace_fn):
                     rounds = list(state["backlog"])[:PULL_BATCH]
             except (ValueError, KeyError, TypeError, AttributeError) as e:
                 return self.reply(400, json.dumps({"error": str(e)}).encode())
-            self.reply(200, json.dumps({"rounds": rounds, "ip": state["ip"]}, separators=(",", ":")).encode())
+            self.reply(200, json.dumps({"rounds": rounds, "ip": state["ip"], "version": VERSION},
+                                       separators=(",", ":")).encode())
 
         def reply(self, code, body):
             self.send_response(code)
@@ -1514,6 +1615,7 @@ def pull_agent(path, name, agent):
             log(f"cannot pull from {name} ({agent['url']}): {e}")
             return
         note_site(path, name, site_ip(got.get("ip")))
+        AGENT_VERSIONS[name] = got.get("version") if VERSION_RE.fullmatch(str(got.get("version"))) else None
         now, ids = int(time.time()), {t["id"] for t in mine}
         for r in rounds if isinstance(rounds, list) else []:
             try:
@@ -1789,12 +1891,19 @@ def board(db, sources, src, targets, rng, now):
     info = site_info(db, sources)
     return {"now": now, "step": STEP, "trace_step": trace_rounds() * STEP, "editable": editable_why() is None,
             "source": src, "range": rng, "start": start, "width": width, "cells": nb,
-            "auth": bool(PASSWORD), "version": VERSION, "targets": out,
+            "auth": bool(PASSWORD), "version": VERSION, "targets": out, **update_info(),
             "sources": [{"name": x, "last_ts": last.get(x), **{k: info[x][k] for k in ("ip", "asn", "cc", "network", "place")}}
                         for x in sources],
             "fleet": [round(statistics.median(f), 1) if f else None for f in fleet],
             "problems": problems, "clusters": clusters, "local": local, "events": events,
             "loss_warn": LOSS_WARN, "loss_crit": LOSS_CRIT}
+
+
+def update_info():
+    """What the page says about updates: a newer release, if any, and whether its Update button can ask for it."""
+    up = newer(LATEST["version"])
+    return {"latest": LATEST["version"] if up else None, "latest_url": LATEST["url"] if up else None,
+            "can_update": bool(UPDATE_URL) and editable_why() is None}
 
 
 def clusters_of(problems):
@@ -1936,7 +2045,7 @@ def metrics(db, sources, targets, now):
 
 LEVEL = {"down": (0xD03B3B, 5, "rotating_light"), "crit": (0xEC835A, 4, "warning"), "warn": (0xFAB219, 3, "warning"),
          "ok": (0x0CA30C, 3, "white_check_mark"), "route": (0x2A78D6, 3, "twisted_rightwards_arrows"),
-         "silent": (0x898781, 4, "zzz")}
+         "silent": (0x898781, 4, "zzz"), "release": (0x7A5CC7, 3, "arrow_up")}
 WORDS = {"ok": "OK", "warn": "warning", "crit": "critical", "down": "down", "stale": "no data"}
 
 
@@ -2123,7 +2232,7 @@ LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 @font-face{font-family:"Archivo";src:url(/fonts/archivo.woff2) format("woff2");font-weight:100 900;font-stretch:62% 125%}
 @font-face{font-family:"Plex Mono";src:url(/fonts/plex-mono-400.woff2) format("woff2");font-weight:400}
 :root{color-scheme:dark;--bg:#111110;--panel:#171716;--ink:#ebe9e4;--ink-2:#aaa79f;--ink-3:#8f8c84;--line-2:#3a3834;--brand:#ff6a33;--bad:#f0524a}
-:root[data-theme=light]{color-scheme:light;--bg:#f2f0eb;--panel:#faf9f6;--ink:#171717;--ink-2:#4f4d48;--ink-3:#6b6860;--line-2:#c7c2b6;--brand:#c2410c;--bad:#c0301c}
+:root[data-theme=light]{color-scheme:light;--bg:#f2f0eb;--panel:#faf9f6;--ink:#171717;--ink-2:#4f4d48;--ink-3:#625f58;--line-2:#c7c2b6;--brand:#c2410c;--bad:#c0301c}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:grid;place-items:center;padding:40px 16px;background:var(--bg);color:var(--ink);
 font:14px/1.45 "Archivo","Helvetica Neue",Helvetica,sans-serif;-webkit-font-smoothing:antialiased}
@@ -2182,7 +2291,8 @@ class Handler(BaseHTTPRequestHandler):
                 name = self.agent()
                 if not name:
                     return self.send(401, b'{"error":"bad token"}', "application/json")
-                return self.json({**steps(), "targets": [agent_view(t) for t in targets_for(name)]})
+                return self.json({**steps(), "latest": LATEST["version"],
+                                  "targets": [agent_view(t) for t in targets_for(name)]})
             if not signed_in(self.headers.get("Cookie")):
                 if u.path.startswith("/api/"):
                     return self.send(401, b'{"error":"sign in"}', "application/json")
@@ -2200,6 +2310,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json(self.target_list())
                 if u.path == "/api/sites":
                     return self.json(self.site_list(db))
+                if u.path == "/api/version":            # the page asks while an update is under way
+                    return self.json({"version": VERSION, **update_info()})
                 if u.path == "/api/overview":
                     return self.json(overview(db, self.sources, src, self.targets, now))
                 if u.path == "/api/board":
@@ -2269,6 +2381,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.edit_targets(body)
         if path == "/api/sites":
             return self.edit_site(body)
+        if path == "/api/update":
+            return self.update()
         if path != "/api/agent/push":
             return self.send(404, b'{"error":"not found"}', "application/json")
         name = self.agent()
@@ -2281,6 +2395,7 @@ class Handler(BaseHTTPRequestHandler):
             log(f"rejected a round from {name}: {e}")
             return self.send(400, json.dumps({"error": f"bad round: {e}"}).encode(), "application/json")
         store(self.db, *round_rows(name, ts, pings, traces), now)
+        AGENT_VERSIONS[name] = agent_version(self.headers.get("User-Agent"))
         if dropped:
             log(f"from {name}'s round {ts}, left out: {'; '.join(dropped[:5])}")
         # where it is: what it says (0.13 agents), else the address its push came from, when that is a public one
@@ -2328,7 +2443,8 @@ class Handler(BaseHTTPRequestHandler):
         why, info, last = editable_why(), site_info(db, self.sources), last_rounds(db)
         kind = lambda s: "local" if s == self.sources[0] else "pull" if self.agents.get(s, {}).get("url") else "push"
         return {"editable": why is None, "why": why, "asn": ASN_LOOKUP, "now": int(time.time()), "step": STEP,
-                "sites": [{"name": s, "kind": kind(s), "url": self.agents.get(s, {}).get("url"), "last_ts": last.get(s),
+                "version": VERSION, "sites": [{"name": s, "kind": kind(s), "url": self.agents.get(s, {}).get("url"),
+                           "last_ts": last.get(s), "runs": VERSION if s == self.sources[0] else AGENT_VERSIONS.get(s),
                            "targets": sum(s in probers(t, self.sources) for t in self.targets), **info[s]}
                           for s in self.sources]}
 
@@ -2350,6 +2466,20 @@ class Handler(BaseHTTPRequestHandler):
         log(f"site edited on the page: {d['name']}")
         with db_open(self.db) as db:
             self.json({"ok": True, **self.site_list(db)})
+
+    def update(self):
+        """The page's Update button: same guard as the edits (a password, signed in, JSON only), then the updater."""
+        if not signed_in(self.headers.get("Cookie")):
+            return self.send(401, b'{"error":"sign in"}', "application/json")
+        if editable_why() or "application/json" not in self.headers.get("Content-Type", ""):
+            return self.send(403, b'{"error":"updating from the page is off"}', "application/json")
+        if not UPDATE_URL:
+            return self.send(404, b'{"error":"set UPDATE_URL to update from the page"}', "application/json")
+        asked, said = request_update()
+        log(f"update requested from the page: {said}")
+        if not asked:
+            return self.send(502, json.dumps({"error": said}).encode(), "application/json")
+        self.json({"ok": True, "said": said, "version": VERSION})
 
     def edit_targets(self, body):
         """The page's edits: signed in, JSON only (a cross-site form cannot send it), written to targets.json."""
@@ -2677,6 +2807,7 @@ def after_round(db, a):
 
 def main():
     global PASSWORD, METRICS_TOKEN, PUBLIC_URL, ASN_LOOKUP, LOSS_WARN, LOSS_CRIT, ALERTS, TRACE_PARALLEL, STEP_ENV, TRACE_STEP, STEP
+    global UPDATE_CHECK, UPDATE_URL, UPDATE_TOKEN
     env = os.environ.get
     ap = argparse.ArgumentParser(description="SmokePing-style latency + mtr traceroutes")
     ap.add_argument("--targets", type=Path, default=Path(env("TARGETS", HERE / "targets.ini")))
@@ -2701,6 +2832,10 @@ def main():
     PASSWORD, METRICS_TOKEN = env("PASSWORD") or None, env("METRICS_TOKEN") or None
     PUBLIC_URL = (env("PUBLIC_URL") or "").rstrip("/") or None
     ASN_LOOKUP = env("ASN", "1") != "0"
+    UPDATE_CHECK = env("UPDATE_CHECK", "1") != "0"
+    UPDATE_URL, UPDATE_TOKEN = env("UPDATE_URL") or None, env("UPDATE_TOKEN") or None
+    if UPDATE_URL and not UPDATE_URL.startswith(("http://", "https://")):
+        raise SystemExit("UPDATE_URL: an http:// or https:// address (the updater's webhook)")
     LOSS_WARN, LOSS_CRIT = float(env("LOSS_WARN", LOSS_WARN)), float(env("LOSS_CRIT", LOSS_CRIT))
     TRACE_PARALLEL = _int(int(env("TRACE_PARALLEL", TRACE_PARALLEL)), 1, 64)
     if env("STEP"):
@@ -2770,12 +2905,15 @@ def main():
                                                  after_round(db, a)), daemon=True).start()
         if ASN_LOOKUP:
             threading.Thread(target=asn_namer, args=(db,), daemon=True).start()
+        if UPDATE_CHECK:
+            threading.Thread(target=release_checker, args=(db,), daemon=True).start()
         threading.Thread(target=fill_paths, args=(db, [(s, t["id"]) for s in Handler.sources for t in Handler.targets]),
                          daemon=True).start()
         Handler.db = db
     refresh_board(ALL if len(Handler.sources) > 1 else Handler.sources[0], 86400)     # what the page opens on
 
-    extras = [x for x, on in (("sign-in", PASSWORD), ("alerts", ALERTS.enabled()), ("metrics token", METRICS_TOKEN)) if on]
+    extras = [x for x, on in (("sign-in", PASSWORD), ("alerts", ALERTS.enabled()), ("metrics token", METRICS_TOKEN),
+                              ("updates from the page", UPDATE_URL)) if on]
     timing = f"pings every {STEP} s" + (f", traces every {trace_rounds() * STEP} s" if trace_rounds() > 1 else "")
     log(f"smoketrace {VERSION}: {len(Handler.targets)} targets, sources {', '.join(Handler.sources)}, {timing}"
         f"{', ' + ', '.join(extras) if extras else ''}, http://{a.bind}:{a.port}")

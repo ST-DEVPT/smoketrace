@@ -124,7 +124,8 @@ services:
 ```
 
 **Update** to a new version: `docker compose pull && docker compose up -d`. The version you run is shown in the
-corner of the page.
+corner of the page; when a newer one is out, the page says so (and the alerts do, once) and can update itself
+through an updater you already run ([below](#updates)).
 
 **Try it first** with made-up data, no setup: `docker run --rm -p 8099:8099 -e DEMO=1 ghcr.io/st-devpt/smoketrace:latest`,
 then open `http://localhost:8099`.
@@ -237,6 +238,29 @@ scrape_configs:
 
 [`docs/grafana.json`](docs/grafana.json) is a dashboard to import.
 
+## Updates
+
+Every 6 hours the server asks GitHub for the latest release. When it is newer than the one running:
+
+- the sidebar says **v0.15.0 is out**, with what changed and **How to update** (the two commands, for the server
+  and for the sites, with a copy button);
+- one alert goes to Discord, ntfy or the webhook, once per version;
+- each agent logs it at its next round, and the **Sites** page shows every site's version, marking those that are
+  not on the server's.
+
+**Update from the page.** smoketrace never touches Docker itself (that takes the Docker socket, which is root on
+the host). It calls an updater you run instead: set `UPDATE_URL` to its webhook, and `UPDATE_TOKEN` if it wants a
+bearer token, and **Update** appears next to the notice (with `PASSWORD` set, for signed-in users). A Portainer
+or Komodo stack webhook works, or any updater with an HTTP API that pulls the image and recreates the container;
+check its own docs for the address. The page waits for the new version to answer and reloads.
+
+```yaml
+      UPDATE_URL: https://portainer.lan:9443/api/stacks/webhooks/your-webhook-id
+      # UPDATE_TOKEN: the-updater-token        # sent as Authorization: Bearer ...
+```
+
+`UPDATE_CHECK: "0"` turns the check off; nothing is then asked of GitHub.
+
 ## Every option
 
 Everything is an environment variable in `docker-compose.yml` (or a flag without Docker: `--name`, `--port`…).
@@ -267,6 +291,14 @@ Everything is an environment variable in `docker-compose.yml` (or a flag without
 | `ALERT_ROUTES` | `1` | `0`: alerts for status changes only. |
 | `LOSS_WARN` | `10` | Loss in % for a warning (2 of 20 pings). Per target on the Targets page. |
 | `LOSS_CRIT` | `20` | Loss in % for critical (4 of 20 pings). Per target on the Targets page. |
+
+**Updates** ([details](#updates))
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `UPDATE_CHECK` | `1` | `0`: never ask GitHub for a newer release. |
+| `UPDATE_URL` | none | An updater's webhook the page's **Update** button calls (needs `PASSWORD`). |
+| `UPDATE_TOKEN` | none | Sent to `UPDATE_URL` as a bearer token. |
 
 **Prometheus and tuning**
 
