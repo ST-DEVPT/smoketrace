@@ -18,7 +18,7 @@
   --line: #272624; --line-2: #3a3834;
   --ink: #ebe9e4; --ink-2: #aaa79f; --ink-3: #8f8c84;
   --brand: #ff6a33; --accent: #6eb0cf; --accent-soft: rgba(110, 176, 207, .09); --on-bad: #111110;
-  --ok: #7fbf6a; --warn: #e2b341; --crit: #f08a3c; --down: #f0524a; --stale: #6b6860;
+  --ok: #7fbf6a; --warn: #e2b341; --crit: #f08a3c; --down: #f0524a; --stale: #6b6860; --warn-ink: #e2b341;
   --cell-ok: #24361f; --cell-none: #3a3834; --lat-0: #2c2b28; --sel: rgba(110, 176, 207, .3); --lat-1: #e2b341; --lat-2: #f0524a;
   --route-1: #6eb0cf; --route-2: #b69ae0; --route-3: #5fbf9f; --route-x: #8f8c84;
   --src-2: #e48fb4; --src-3: #d8c06a;
@@ -30,7 +30,7 @@
   --line: #dedad1; --line-2: #c7c2b6;
   --ink: #171717; --ink-2: #4f4d48; --ink-3: #625f58;
   --brand: #c2410c; --accent: #2c6b8a; --accent-soft: rgba(44, 107, 138, .08); --on-bad: #ffffff;
-  --ok: #3b7a39; --warn: #8a5c00; --crit: #cc5f0c; --down: #c0301c; --stale: #a9a499;
+  --ok: #3b7a39; --warn: #a66f00; --crit: #cc5f0c; --down: #c0301c; --stale: #a9a499; --warn-ink: #8a5c00;   /* warn: fills and marks; warn-ink: small text, 4.5:1 */
   --cell-ok: #c3d6b6; --cell-none: #b9b4a8; --lat-0: #dbd7cd; --sel: rgba(44, 107, 138, .22); --lat-1: #d9a21b; --lat-2: #c0301c;
   --route-1: #2c6b8a; --route-2: #6d4bb0; --route-3: #1d7a5f; --route-x: #8a867d;
   --src-2: #b0436f; --src-3: #8a7210;
@@ -54,7 +54,7 @@ h1:focus { outline: none; }
 .dim { color: var(--ink-3); }
 .grow { flex: 1; }
 .cap { font-size: 12.5px; color: var(--ink-2); }
-.warn-t { color: var(--warn); }
+.warn-t { color: var(--warn-ink); }
 [hidden] { display: none !important; }
 
 /* ---------- shell: the sidebar and the page ---------- */
@@ -213,7 +213,7 @@ tr.grp td { height: 40px; padding-top: 14px; vertical-align: bottom; font-weight
 td .nm { font-weight: 600; }
 td .sub { display: block; font: 11.5px "Plex Mono", monospace; color: var(--ink-3); }
 .strip { width: 200px; height: 12px; }
-.dlt { margin-left: 6px; font-size: 11.5px; color: var(--warn); }
+.dlt { margin-left: 6px; font-size: 11.5px; color: var(--warn-ink); }
 .dots { display: inline-flex; gap: 8px; }
 .dots span { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--ink-2); }
 
@@ -353,7 +353,7 @@ table.tlist td { height: 44px; }
 table.tlist td.act { width: 1%; text-align: right; }
 table.slist td { height: 52px; vertical-align: middle; }
 table.slist tr[aria-current="true"] td { background: var(--panel); }
-table.slist .old { display: inline-flex; align-items: center; gap: 5px; color: var(--warn); }
+table.slist .old { display: inline-flex; align-items: center; gap: 5px; color: var(--warn-ink); }
 table.slist .sub { margin-top: 2px; font: 12px "Archivo", "Helvetica Neue", Helvetica, sans-serif; color: var(--ink-3); }
 table.slist .mono .sub { font-family: "Plex Mono", ui-monospace, Menlo, Consolas, monospace; }
 .tnav { display: grid; gap: 1px; margin-bottom: 4px; }
@@ -493,7 +493,7 @@ const I18N = {
     uAvail: v => `v${v} is out`, uNotes: "What changed", uNow: "Update", uHow: "How to update", uTitle: v => `Update to v${v}`,
     uLede: (v, c) => `This server runs v${c}. Run this where its docker-compose.yml is:`,
     uAgents: "And at every site, so agents stay on the server's version:", uCopy: "Copy", uCopied: "Copied",
-    uHook: "Set UPDATE_URL to an updater's webhook (a Portainer or Komodo stack webhook, or any updater's HTTP API) and the Update button does this for the server.",
+    uHook: "Set UPDATE_URL to the webhook of an updater you run (one that pulls the image and recreates the container) and the Update button does this for the server.",
     uAsked: v => `Update to v${v} asked for. The page reloads when the new version answers.`,
     uSlow: "No new version after 5 minutes: check the updater's log.", uFail: e => `The update was not asked for: ${e}`,
     uClose: "Close", sVer: "Version", sOld: v => `Not on the server's version (v${v}): update this site`, sNoVer: "older than 0.15",
@@ -592,7 +592,7 @@ const I18N = {
     uAvail: v => `Saiu a v${v}`, uNotes: "O que mudou", uNow: "Atualizar", uHow: "Como atualizar", uTitle: v => `Atualizar para a v${v}`,
     uLede: (v, c) => `Este servidor está na v${c}. Corra isto onde está o docker-compose.yml:`,
     uAgents: "E em cada local, para os agentes ficarem na versão do servidor:", uCopy: "Copiar", uCopied: "Copiado",
-    uHook: "Defina UPDATE_URL com o webhook de um atualizador (webhook de uma stack do Portainer ou do Komodo, ou a API HTTP de qualquer atualizador) e o botão Atualizar faz isto no servidor.",
+    uHook: "Defina UPDATE_URL com o webhook de um atualizador que já use (um que volte a puxar a imagem e recrie o contentor) e o botão Atualizar faz isto no servidor.",
     uAsked: v => `Atualização para a v${v} pedida. A página recarrega quando a nova versão responder.`,
     uSlow: "Sem versão nova ao fim de 5 minutos: veja o log do atualizador.", uFail: e => `A atualização não foi pedida: ${e}`,
     uClose: "Fechar", sVer: "Versão", sOld: v => `Não está na versão do servidor (v${v}): atualize este local`, sNoVer: "anterior à 0.15",

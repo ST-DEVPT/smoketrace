@@ -58,8 +58,8 @@ services:
 
       # --- updates -------------------------------------------------------------------------------------------
       # The page says when a new version is out (asked of GitHub every 6 h) and alerts it once. Its Update button
-      # calls an updater you run (a Portainer or Komodo stack webhook, or any updater's HTTP API):
-      # UPDATE_URL: https://portainer.lan:9443/api/stacks/webhooks/your-webhook-id
+      # calls an updater you run, one that pulls the image and recreates the container (see its docs):
+      # UPDATE_URL: https://updater.lan/the-webhook-your-updater-gives-you
       # UPDATE_TOKEN: the-updater-token          # sent as a bearer token, if the updater wants one
       # UPDATE_CHECK: "0"                        # never ask GitHub
 

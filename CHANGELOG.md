@@ -8,16 +8,19 @@ Versions follow [semantic versioning](https://semver.org).
   the sidebar says so (with a dot on the menu button on phones), with what changed and how to update, for the
   server and for every site; one alert goes out per version (Discord, ntfy, webhook), remembered across restarts;
   agents log it. `UPDATE_CHECK=0` turns the check off.
-- **Update from the page.** With `UPDATE_URL` (an updater's webhook: a Portainer or Komodo stack webhook, or any
-  updater's HTTP API) and `PASSWORD`, an **Update** button asks the updater, waits for the new version to answer
-  and reloads the page. smoketrace is never given the Docker socket.
+- **Update from the page.** With `UPDATE_URL` (the webhook or HTTP API of an updater you run, one that pulls the
+  image and recreates the container) and `PASSWORD`, an **Update** button asks the updater, waits for the new
+  version to answer and reloads the page. It updates the server; each site runs its own command. smoketrace is
+  never given the Docker socket.
 - **Every site's version** on the Sites page, marked when it is not on the server's (agents now say their
   version; older ones show none).
 - **A review of the page in every style** (dark and light, English and Portuguese, 390, 768 and 1440 px), measured,
-  not eyeballed: no sideways scroll and no clipped text anywhere; every text now reaches 4.5:1 contrast (the light
-  theme's secondary grey and warning amber were 3.8 to 4.4); every control that stands alone is at least 24 px
-  (table headers, Edit, the sidebar's buttons); "Sign out" no longer breaks over two lines; the update commands
-  wrap instead of hiding their end. Every keyboard stop shows its focus.
+  not eyeballed, on the overview, a target, Targets with its form, Sites, the update dialog and the sign-in: no
+  sideways scroll and no clipped text; every HTML text reaches 4.5:1 contrast (the light theme's secondary grey
+  and the amber of warning text were 3.8 to 4.4; the amber of heatmap cells and icons stays as it was, so the
+  cells still darken with severity); every control that stands alone is at least 24 px (table headers, Edit, the
+  sidebar's buttons); "Sign out" no longer breaks over two lines; the update commands wrap instead of hiding
+  their end; focus shows on every keyboard stop of the overview. Not measured: text drawn on the charts' canvas.
 
 ## [0.14.1] - 2026-10-24
 

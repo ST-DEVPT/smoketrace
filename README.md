@@ -250,12 +250,13 @@ Every 6 hours the server asks GitHub for the latest release. When it is newer th
 
 **Update from the page.** smoketrace never touches Docker itself (that takes the Docker socket, which is root on
 the host). It calls an updater you run instead: set `UPDATE_URL` to its webhook, and `UPDATE_TOKEN` if it wants a
-bearer token, and **Update** appears next to the notice (with `PASSWORD` set, for signed-in users). A Portainer
-or Komodo stack webhook works, or any updater with an HTTP API that pulls the image and recreates the container;
-check its own docs for the address. The page waits for the new version to answer and reloads.
+bearer token, and **Update** appears next to the notice (with `PASSWORD` set, for signed-in users). Any updater
+whose webhook or HTTP API pulls the image again and recreates the container will do, for instance a stack webhook
+in Portainer (Business Edition) or Komodo; check its own docs for the address and that it pulls the image. The
+page waits for the new version to answer and reloads. It updates the server only: each site runs its own command.
 
 ```yaml
-      UPDATE_URL: https://portainer.lan:9443/api/stacks/webhooks/your-webhook-id
+      UPDATE_URL: https://updater.lan/the-webhook-your-updater-gives-you
       # UPDATE_TOKEN: the-updater-token        # sent as Authorization: Bearer ...
 ```
 
