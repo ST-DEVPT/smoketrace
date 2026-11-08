@@ -51,7 +51,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-VERSION = "0.15.0"           # the top of CHANGELOG.md says the same; a test checks
+VERSION = "0.15.1"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise

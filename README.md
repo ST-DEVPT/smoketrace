@@ -13,7 +13,7 @@
 <p align="center">
   <a href="https://github.com/ST-DEVPT/smoketrace/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ST-DEVPT/smoketrace/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/ST-DEVPT/smoketrace/releases"><img alt="Release" src="https://img.shields.io/github/v/release/ST-DEVPT/smoketrace?color=2a78d6"></a>
-  <img alt="Python" src="https://img.shields.io/badge/python-3.10%E2%80%933.14-3b7a39">
+  <img alt="Python" src="https://img.shields.io/badge/python-3.10%E2%80%933.15-3b7a39">
   <img alt="Dependencies" src="https://img.shields.io/badge/dependencies-none-3b7a39">
   <a href="https://github.com/ST-DEVPT/smoketrace/pkgs/container/smoketrace"><img alt="Image" src="https://img.shields.io/badge/ghcr.io-amd64%20%7C%20arm64-2c6b8a"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-4f4d48"></a>
@@ -432,7 +432,7 @@ python3 test_ui.py              # the page in Chromium against the demo: navigat
 python3 docs/screenshots.py     # regenerates the images in docs/ (needs Playwright)
 ```
 
-CI runs the tests on Python 3.10 to 3.14, the demo end to end, the page in a real browser, a real round of fping,
+CI runs the tests on Python 3.10 to 3.15, the demo end to end, the page in a real browser, a real round of fping,
 TCP, DNS and mtr against the runner itself, an RRD import through rrdtool, and the image as shipped: a server and
 an agent, each with only `NET_RAW`, probing for real.
 

@@ -2,6 +2,11 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.15.1] - 2026-11-08
+
+- The image runs Python 3.15 (was 3.14); CI tests 3.10 to 3.15.
+- CI actions updated: actions/setup-python 7.1.0, docker/login-action 4.7.0.
+
 ## [0.15.0] - 2026-10-24
 
 - **New versions are announced.** Every 6 hours the server asks GitHub for the latest release. When it is newer,
