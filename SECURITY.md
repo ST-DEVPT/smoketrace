@@ -29,6 +29,9 @@ the updater to restart it.
   socket. The Update button needs `PASSWORD` and a sign-in, like the edits, since it restarts the server.
 - **MariaDB**: its password can stay out of the address, in `DB_PASSWORD`. The image installs one package,
   PyMySQL, pinned by hash in `requirements.txt`, as the base image is pinned by digest.
+- **The page** is sent with a Content-Security-Policy: it loads and talks to this server only, nothing may frame
+  it and its forms post here only (its own inline script and styles stay allowed: it is one file), and with
+  `Referrer-Policy: no-referrer`. Names from targets, agents and AS records are escaped before they reach the page.
 - A host that could be read as a command-line option is refused, wherever the target comes from (the page,
   `targets.ini`, SmokePing's config, or the server's list as an agent receives it).
 

@@ -51,7 +51,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-VERSION = "0.15.1"           # the top of CHANGELOG.md says the same; a test checks
+VERSION = "0.16.0"           # the top of CHANGELOG.md says the same; a test checks
 HERE = Path(__file__).resolve().parent
 STEP = DEFAULT_STEP = 300   # seconds per round (SmokePing default); SmokePing's *** Database *** can change it
 PINGS = DEFAULT_PINGS = 20  # pings per round (SmokePing default); likewise
@@ -2259,6 +2259,12 @@ for(const k in T)document.getElementById(k).textContent=T[k];const e=document.qu
 
 # ---------- HTTP ----------
 
+# The page is one file with its script and styles inline, so those stay allowed; everything else is this server
+# only: a script that got in could not load more code, nor send what it reads anywhere else.
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+
+
 @functools.lru_cache(maxsize=8)
 def gzipped(body):
     """A board is sent to every viewer as it is: compressed once (bytes keep their hash, so a hit costs nothing)."""
@@ -2544,6 +2550,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "public, max-age=604800, immutable" if cache else "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        if ctype.startswith("text/html"):       # the page loads and talks to this server only; nothing may frame it
+            self.send_header("Content-Security-Policy", CSP)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

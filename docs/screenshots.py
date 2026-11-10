@@ -23,7 +23,7 @@ RANGES = {"3 h": 10800, "24 h": 86400, "7 d": 604800, "30 d": 2592000}
 
 
 def new_page(browser, theme="dark", view="heat", **kw):
-    page = browser.new_page(**kw)
+    page = browser.new_page(bypass_csp=True, **kw)   # the script evaluates strings in the page
     # the README is in English; the theme and the dashboard's view are the viewer's choices, set here
     page.add_init_script(f"localStorage.setItem('lang', 'en'); localStorage.setItem('theme', '{theme}');"
                          f"localStorage.setItem('view', '{view}'); localStorage.setItem('brange', '86400')")

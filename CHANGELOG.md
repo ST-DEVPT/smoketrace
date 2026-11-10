@@ -2,6 +2,15 @@
 
 Versions follow [semantic versioning](https://semver.org).
 
+## [0.16.0] - 2026-11-10
+
+- **Heatmap colours that hold without hue.** Warning, critical and down cells now step clearly in lightness in
+  both themes (in the light theme warning and critical had almost the same lightness, so with red-green colour
+  blindness they read as one). The cells, the table's history strips, the loss bars and their legends have their
+  own colours for this; status text and icons keep theirs.
+- **The page is locked to its own server**: a Content-Security-Policy (it loads and talks to this server only,
+  nothing may frame it, forms post here only) and `Referrer-Policy: no-referrer`, on the page and the sign-in.
+
 ## [0.15.1] - 2026-11-08
 
 - The image runs Python 3.15 (was 3.14); CI tests 3.10 to 3.15.

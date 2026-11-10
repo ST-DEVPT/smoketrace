@@ -700,6 +700,8 @@ def test_sign_in_and_metrics():
             expect_http(401, lambda: call(url + "/api/overview"))
             page = urllib.request.urlopen(url + "/", timeout=5)                 # redirected to the sign-in page
             assert page.url.endswith("/login") and "Password" in page.read().decode()
+            csp = page.headers["Content-Security-Policy"]                        # the page talks to this server only
+            assert "connect-src 'self'" in csp and "frame-ancestors 'none'" in csp and page.headers["Referrer-Policy"] == "no-referrer"
             e = expect_http(401, lambda: call(url + "/login", form="password=wrong"))
             assert "Wrong password" in e.read().decode()
 

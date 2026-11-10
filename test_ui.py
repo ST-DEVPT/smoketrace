@@ -41,7 +41,7 @@ def check(name, ok, detail=""):
 
 with sync_playwright() as p:
     b = p.chromium.launch(executable_path=os.environ.get("CHROMIUM") or None)
-    pg = b.new_page(viewport={"width": 1440, "height": 900})
+    pg = b.new_page(viewport={"width": 1440, "height": 900}, bypass_csp=True)   # the checks below evaluate strings
     errors = []
     pg.on("pageerror", lambda e: errors.append(str(e)))
     pg.add_init_script(SLOW)
@@ -172,6 +172,17 @@ with sync_playwright() as p:
     check("the heatmap's colour buttons still answer", r == ["latency", ["latency"]], r)
     pg.click("[data-mode=status]")
 
+    # the page as a browser really gets it, its Content-Security-Policy enforced: nothing it does is refused
+    strict, refused = b.new_page(viewport={"width": 1440, "height": 900}), []
+    strict.on("console", lambda m: m.type == "error" and refused.append(m.text))
+    strict.on("pageerror", lambda e: refused.append(str(e)))
+    for where, ready in (("/#/", "#hm"), ("/#/t/internet-cloudflare-dns", "#chart"), ("/#/targets", "table.tlist"), ("/#/sites", "table.slist")):
+        strict.goto(URL + where)
+        strict.wait_for_selector(ready)
+        strict.wait_for_timeout(500)
+    check("the page works under its own Content-Security-Policy", refused == [], refused)
+    strict.close()
+
     # 13. the sites page: where each site is, then back to the overview from the sidebar
     pg.goto(URL + "/#/sites")
     pg.wait_for_selector("table.slist tbody tr")
@@ -240,7 +251,7 @@ EDIT_URL = f"http://127.0.0.1:{srv.server_address[1]}"
 
 with sync_playwright() as p:
     b = p.chromium.launch(executable_path=os.environ.get("CHROMIUM") or None)
-    pg = b.new_page(viewport={"width": 1440, "height": 900})
+    pg = b.new_page(viewport={"width": 1440, "height": 900}, bypass_csp=True)   # the checks below evaluate strings
     errors = []
     pg.on("pageerror", lambda e: errors.append(str(e)))
     pg.add_init_script("localStorage.setItem('lang','en');localStorage.setItem('theme','dark')")
